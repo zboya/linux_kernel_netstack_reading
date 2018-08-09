@@ -837,6 +837,7 @@ out:
 }
 EXPORT_SYMBOL(udp_push_pending_frames);
 
+// 发送应用层的数据包
 int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 {
 	struct inet_sock *inet = inet_sk(sk);
@@ -851,12 +852,14 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	__be32 daddr, faddr, saddr;
 	__be16 dport;
 	u8  tos;
+	// 判断是不是udplite
 	int err, is_udplite = IS_UDPLITE(sk);
 	int corkreq = up->corkflag || msg->msg_flags&MSG_MORE;
 	int (*getfrag)(void *, char *, int, int, int, struct sk_buff *);
 	struct sk_buff *skb;
 	struct ip_options_data opt_copy;
 
+	// 如果长度大于64K，返回错误
 	if (len > 0xFFFF)
 		return -EMSGSIZE;
 
@@ -904,6 +907,7 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 				return -EAFNOSUPPORT;
 		}
 
+		// 获取目标地址和目标端口
 		daddr = usin->sin_addr.s_addr;
 		dport = usin->sin_port;
 		if (dport == 0)
@@ -911,6 +915,7 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	} else {
 		if (sk->sk_state != TCP_ESTABLISHED)
 			return -EDESTADDRREQ;
+		// 获取目标地址和目标端口
 		daddr = inet->inet_daddr;
 		dport = inet->inet_dport;
 		/* Open fast path for connected socket.
@@ -967,6 +972,7 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 		connected = 0;
 	}
 
+	// 看是不是多播地址
 	if (ipv4_is_multicast(daddr)) {
 		if (!ipc.oif)
 			ipc.oif = inet->mc_index;

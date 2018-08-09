@@ -31,6 +31,7 @@ int simple_getattr(const struct path *path, struct kstat *stat,
 }
 EXPORT_SYMBOL(simple_getattr);
 
+//获取文件系统状态信息
 int simple_statfs(struct dentry *dentry, struct kstatfs *buf)
 {
 	buf->f_type = dentry->d_sb->s_magic;

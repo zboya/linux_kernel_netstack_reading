@@ -1,5 +1,5 @@
 
-/* tcp client
+/* client
 	sokcet()
 	connect()
 	write()
@@ -7,7 +7,7 @@
 	close()
 */
 
-/*	tcp server
+/*	server
 	socket()
 	bind()
 	listen()

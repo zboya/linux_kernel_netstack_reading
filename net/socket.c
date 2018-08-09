@@ -68,17 +68,22 @@ include/net/sock.h
 net/socket.c
 net/ipv4/af_inet.c
 
-		+-----------------------------------+
-		| 		+---------------+			|
-		|		|      app		|			|
-		|		+---------------+			|
-		|									|
-		|		+---------------+			|
-		|		|	  库函数	 |			 |
-		|		+---------------+			|
-		+------------------------------------
+linux实现的接口是bsd套接字https://zh.wikipedia.org/wiki/Berkeley套接字
+client
+	sokcet() 	创建socket fd
+	connect()	连接对端
+	write()		发送数据
+	read()		读物数据
+	close()		关闭连接
 
-
+server
+	socket()	创建socket fd
+	bind()		为一个套接字分配地址
+	listen()	监听
+	accpet()	接收一个连接
+	read()		读取数据
+	write()		发送数据
+	close()		关闭fd
 */
 
 
@@ -160,6 +165,8 @@ static ssize_t sock_splice_read(struct file *file, loff_t *ppos,
  *	in the operation structures but are done directly via the socketcall() multiplexor.
  */
 
+// 文件系统与socket结合后的操作集。
+// socket fd作为特殊的fd，也拥有和普通fd一样的操作
 static const struct file_operations socket_file_ops = {
 	.owner =	THIS_MODULE,
 	.llseek =	no_llseek,
@@ -183,6 +190,13 @@ static const struct file_operations socket_file_ops = {
  */
 
 static DEFINE_SPINLOCK(net_family_lock);
+//在函数中sock_register注册，例如netlink family注册在函数netlink_proto_init中，如果为netlink family，net_families[PF_NETLINK]指向netlink_family_ops
+//pf_netlink family为netlink_family_ops    通过sock_register函数注册到该结构中
+//PF_NETLINK FAMILY对应网络协议族netlink_family_ops  对应操作集netlink_ops   proto为netlink_proto
+//PF_INET 对应的网络协议族inet_family_ops, 操作集inetsw_array(根据不同协议TCP  UDP得到不同的ops和proto)
+//PF_PACKET对应的网络协议族为packet_family_ops
+//在内核是初始化时，这些模块会在自己的初始化函数内部调用sock_register()接口将各自的地址簇对象注册到net_families[]数组里。
+//如果family未PF_INET则为inet_create，参考sock_register(&inet_family_ops);
 static const struct net_proto_family __rcu *net_families[NPROTO] __read_mostly;
 
 /*
@@ -202,6 +216,8 @@ static const struct net_proto_family __rcu *net_families[NPROTO] __read_mostly;
  *	invalid addresses -EFAULT is returned. On a success 0 is returned.
  */
 
+// 调用move_addr_to_kernel将用户地址空间的socket拷贝到内核空间。uaddr为用户空间，
+// kaddr为内核空间，uaddr是从get_compat_msghdr中获取的用户空间sendmsg的时候的目的sockaddr地址
 int move_addr_to_kernel(void __user *uaddr, int ulen, struct sockaddr_storage *kaddr)
 {
 	if (ulen < 0 || ulen > sizeof(struct sockaddr_storage))
@@ -229,7 +245,7 @@ int move_addr_to_kernel(void __user *uaddr, int ulen, struct sockaddr_storage *k
  *	length of the data is written over the length limit the user
  *	specified. Zero is returned for a success.
  */
-
+// 将内核空间的地址拷贝到用户空间地址
 static int move_addr_to_user(struct sockaddr_storage *kaddr, int klen,
 			     void __user *uaddr, int __user *ulen)
 {
@@ -259,6 +275,7 @@ static int move_addr_to_user(struct sockaddr_storage *kaddr, int klen,
 
 static struct kmem_cache *sock_inode_cachep __ro_after_init;
 
+//分配结点
 static struct inode *sock_alloc_inode(struct super_block *sb)
 {
 	struct socket_alloc *ei;
@@ -286,6 +303,7 @@ static struct inode *sock_alloc_inode(struct super_block *sb)
 	return &ei->vfs_inode;
 }
 
+//释放结点
 static void sock_destroy_inode(struct inode *inode)
 {
 	struct socket_alloc *ei;
@@ -319,7 +337,7 @@ static void init_inodecache(void)
 static const struct super_operations sockfs_ops = {
 	.alloc_inode	= sock_alloc_inode,
 	.destroy_inode	= sock_destroy_inode,
-	.statfs		= simple_statfs,
+	.statfs		= simple_statfs, //获取文件系统状态信息
 };
 
 /*
@@ -386,6 +404,9 @@ static struct dentry *sockfs_mount(struct file_system_type *fs_type,
 
 static struct vfsmount *sock_mnt __read_mostly;
 
+/* 为了能使套接口和文件描述符关联，并支持特殊套接口层的i结点的分配和释放，系统中增加了sockfs文件系统类型sock_fs_type,通过sockfs文件系统的
+get_sb接口和超级块操作集合中的alloc_inode和destroy_inode，可以分配和释放与套接口文件相关的i结点。可以通过/proc/filesystems文件查看操作系统
+支持的文件系统*/
 static struct file_system_type sock_fs_type = {
 	.name =		"sockfs",
 	.mount =	sockfs_mount,
@@ -409,6 +430,7 @@ static struct file_system_type sock_fs_type = {
  *	but we take care of internal coherence yet.
  */
 
+// 根据sock分配一个fd
 struct file *sock_alloc_file(struct socket *sock, int flags, const char *dname)
 {
 	struct qstr name = { .name = "" };
@@ -449,6 +471,8 @@ struct file *sock_alloc_file(struct socket *sock, int flags, const char *dname)
 }
 EXPORT_SYMBOL(sock_alloc_file);
 
+//将socket与虚拟文件系统绑定 sock_map_fd()将之映射到文件描述符，使socket能通过fd进行访问
+//socket与文件系统关联后，以后便可以通过文件系统read/write对socket进行操作了；进程、文件和套接口层关系可以参考樊东东下层 P616
 static int sock_map_fd(struct socket *sock, int flags)
 {
 	struct file *newfile;
@@ -509,6 +533,8 @@ struct socket *sockfd_lookup(int fd, int *err)
 }
 EXPORT_SYMBOL(sockfd_lookup);
 
+//首先调用函数sockfd_lookup_light()函数通过文件描述符来查找对应的套接字sock。
+// 在内核中创建套接字sys_socket的时候，sock_map_fd将socket与虚拟文件系统绑定
 static struct socket *sockfd_lookup_light(int fd, int *err, int *fput_needed)
 {
 	struct fd f = fdget(fd);
@@ -580,6 +606,8 @@ static const struct inode_operations sockfs_inode_ops = {
  *	NULL is returned.
  */
 // 分配一个socket
+//sk_alloc创建struct sock,  sock_alloc创建struct socket   
+// sk_alloc创建的sock赋值给了sock_alloc的sk，即socket->sk = sockc
 struct socket *sock_alloc(void)
 {
 	struct inode *inode;
@@ -610,6 +638,7 @@ EXPORT_SYMBOL(sock_alloc);
  *	an inode not a file.
  */
 
+// 释放socket
 void sock_release(struct socket *sock)
 {
 	if (sock->ops) {
@@ -1236,6 +1265,8 @@ call_kill:
 EXPORT_SYMBOL(sock_wake_async);
 
 // 真正创建socket的函数
+//这里面会创建struct socket结构，然后会调用sock_register(&netlink_family_ops)注册的netlink_create来完成struct netlink_sock的创建
+//应用层创建套接字函数: int socket(int domain, int type, int protocol); domain也就是family协议族  如果是netlink协议族，会执行netlink_create
 int __sock_create(struct net *net, int family, int type, int protocol,
 			 struct socket **res, int kern)
 {
@@ -1277,6 +1308,7 @@ int __sock_create(struct net *net, int family, int type, int protocol,
 	 *	the protocol is 0, the family is instructed to select an appropriate
 	 *	default.
 	 */
+	//创建BSD层的struct socket结构，struct sock在下面函数pf->create中创建
 	sock = sock_alloc();
 	if (!sock) {
 		net_warn_ratelimited("socket: no more sockets\n");
@@ -1313,6 +1345,8 @@ int __sock_create(struct net *net, int family, int type, int protocol,
 	/* Now protected by module ref count */
 	rcu_read_unlock();
 
+	// 如果是应用程序创建的是netlink类型的套接字，则会执行netlink_family_ops中的netlink_create 
+	//IPV4 PF_INET协议族为inet_create
 	err = pf->create(net, sock, protocol, kern);
 	if (err < 0)
 		goto out_module_put;
@@ -1366,6 +1400,7 @@ int sock_create_kern(struct net *net, int family, int type, int protocol, struct
 EXPORT_SYMBOL(sock_create_kern);
 
 // 创建一个socket对象，并将socket映射到一个fd上
+//sys_socket 应用层创建套接字，走到该系统调用函数  这里的protocol值为IPPROTO_IP  应用程序直接填的0，就是因为IPPROTO_IP为0
 int __sys_socket(int family, int type, int protocol)
 {
 	int retval;
@@ -1510,12 +1545,15 @@ SYSCALL_DEFINE4(socketpair, int, family, int, type, int, protocol,
  *	the protocol layer (having also checked the address is ok).
  */
 
+// 将socket绑定umyaddr地址
+//如果应用层创建的是netlink的套接字，然后bind，则sock->ops->bind为netlink_bind
 int __sys_bind(int fd, struct sockaddr __user *umyaddr, int addrlen)
 {
 	struct socket *sock;
 	struct sockaddr_storage address;
 	int err, fput_needed;
 
+	//首先调用函数sockfd_lookup_light()函数通过文件描述符来查找对应的套接字sock。
 	sock = sockfd_lookup_light(fd, &err, &fput_needed);
 	if (sock) {
 		err = move_addr_to_kernel(umyaddr, addrlen, &address);
@@ -1524,10 +1562,12 @@ int __sys_bind(int fd, struct sockaddr __user *umyaddr, int addrlen)
 						   (struct sockaddr *)&address,
 						   addrlen);
 			if (!err)
+				//如果应用层创建的是netlink的套接字，然后bind，则sock->ops->bind为netlink_bind，见netlink_ops
 				err = sock->ops->bind(sock,
 						      (struct sockaddr *)
 						      &address, addrlen);
 		}
+		//上面的sockfd_lookup_light有对文件的引用，这里需要减掉
 		fput_light(sock->file, fput_needed);
 	}
 	return err;
@@ -1545,6 +1585,13 @@ SYSCALL_DEFINE3(bind, int, fd, struct sockaddr __user *, umyaddr, int, addrlen)
  *	ready for listening.
  */
 
+//backlog参数控制listen_sock结构中syn_table散列表数组大小,
+//backlog的值如果小于8，则会在reqsk_queue_alloc中设置为8，取值范围8-sysctl_max_syn_backlog,见reqsk_queue_alloc
+/*backlog的值会影响sk->sk_max_ack_backlog以及listen_sock里面的nr_table_entries，和以下参数配合使用.参考http://blog.chinaunix.net/uid-20662820-id-3776090.html
+（1）net.core.somaxconn
+（2）net.ipv4.tcp_max_syn_backlog
+（3）listen系统调用的backlog参数  
+*/
 int __sys_listen(int fd, int backlog)
 {
 	struct socket *sock;
@@ -1602,6 +1649,7 @@ int __sys_accept4(int fd, struct sockaddr __user *upeer_sockaddr,
 		goto out;
 
 	err = -ENFILE;
+	//创建一个新的socket结构来存储新的连接，因为一个旧的socket上面是可以挂很多个连接的
 	newsock = sock_alloc();
 	if (!newsock)
 		goto out_put;
@@ -1688,6 +1736,8 @@ SYSCALL_DEFINE3(accept, int, fd, struct sockaddr __user *, upeer_sockaddr,
  *	include the -EINPROGRESS status for such sockets.
  */
 
+// 连接远端uservaddr地址
+//tcp_v4_connect中会指定本地端口，如果客户端没有指定本地地址的时候，在tcp_v4_connect中根据路由表项指定本地IP地址。本地端口在__inet_hash_connect分配
 int __sys_connect(int fd, struct sockaddr __user *uservaddr, int addrlen)
 {
 	struct socket *sock;
@@ -1726,6 +1776,7 @@ SYSCALL_DEFINE3(connect, int, fd, struct sockaddr __user *, uservaddr,
  *	name to user space.
  */
 
+/* 获取本端地址，注意:不是对端地址 */
 int __sys_getsockname(int fd, struct sockaddr __user *usockaddr,
 		      int __user *usockaddr_len)
 {
@@ -1764,6 +1815,7 @@ SYSCALL_DEFINE3(getsockname, int, fd, struct sockaddr __user *, usockaddr,
  *	name to user space.
  */
 
+/* 获取fd套接口上的对端地址 */
 int __sys_getpeername(int fd, struct sockaddr __user *usockaddr,
 		      int __user *usockaddr_len)
 {
@@ -1822,6 +1874,7 @@ int __sys_sendto(int fd, void __user *buff, size_t len, unsigned int flags,
 	msg.msg_controllen = 0;
 	msg.msg_namelen = 0;
 	if (addr) {
+		//用户空间通过套接字传输的数据内容在tcp_sendmsg函数中的skb_add_data拷贝到SKB中
 		err = move_addr_to_kernel(addr, addr_len, &address);
 		if (err < 0)
 			goto out_put;
@@ -1861,6 +1914,7 @@ SYSCALL_DEFINE4(send, int, fd, void __user *, buff, size_t, len,
  *	sender. We verify the buffers are writable and if needed move the
  *	sender address from kernel to user space.
  */
+// 从该fd中接收消息，并填充消息的源地址
 int __sys_recvfrom(int fd, void __user *ubuf, size_t size, unsigned int flags,
 		   struct sockaddr __user *addr, int __user *addr_len)
 {
@@ -1939,10 +1993,12 @@ static int __sys_setsockopt(int fd, int level, int optname,
 		if (err)
 			goto out_put;
 
+		//如果参数是设置的inet_sock层的相关信息，则走这里
 		if (level == SOL_SOCKET)
 			err =
 			    sock_setsockopt(sock, level, optname, optval,
 					    optlen);
+		//如果参数是设置的inet_connection_sock层的相关信息，则走这里,inet_connection_sock_af_ops
 		else
 			err =
 			    sock->ops->setsockopt(sock, level, optname, optval,
@@ -1999,7 +2055,18 @@ SYSCALL_DEFINE5(getsockopt, int, fd, int, level, int, optname,
 /*
  *	Shutdown a socket.
  */
-
+// int shutdown(int sockfd,int howto);  //返回成功为0，出错为-1.</span>  
+//     该函数的行为依赖于howto的值   
+// 	1.SHUT_RD：值为0，关闭连接的读这一半。 
+// 	2.SHUT_WR：值为1，关闭连接的写这一半。 
+// 	3.SHUT_RDWR：值为2，连接的读和写都关闭。终止网络连接的通用方法是调用close函数。但使用shutdown能更好的控制断连过程（使用第二个参数）。
+// 	参考:http://blog.csdn.net/lgp88/article/details/7176509
+// close与shutdown的区别主要表现在：
+//     close函数会关闭套接字ID，如果有其他的进程共享着这个套接字，那么它仍然是打开的，
+// 	这个连接仍然可以用来读和写，并且有时候这是非常重要的 ，特别是对于多进程并发服务器来说。
+//     而shutdown会切断进程共享的套接字的所有连接，不管这个套接字的引用计数是否为零，
+// 	那些试图读得进程将会接收到EOF标识，那些试图写的进程将会检测到SIGPIPE信号，同时可利用shutdown的第二个参数选择断连的方式。
+ 
 int __sys_shutdown(int fd, int how)
 {
 	int err, fput_needed;
@@ -2083,6 +2150,7 @@ static int copy_msghdr_from_user(struct msghdr *kmsg,
 			    UIO_FASTIOV, iov, &kmsg->msg_iter);
 }
 
+// 应用层的sendmsg函数，经过系统调用后会调用该函数
 static int ___sys_sendmsg(struct socket *sock, struct user_msghdr __user *msg,
 			 struct msghdr *msg_sys, unsigned int flags,
 			 struct used_address *used_address,
@@ -2550,6 +2618,10 @@ static const unsigned char nargs[21] = {
  *  it is set by the callees.
  */
 
+// 整个与socket相关的操作提供了一个统一的接口socketcall.
+// 通过传递进来的call类型,来调用相应的socket相关的函数
+// ! 一般文件句柄相关的操作,比如write,read,aio,poll这些并没有看到(也就是 file_operations).
+// ! 这是因为socket上面其实还有一层vfs层,内核把socket当做一个文件系统来处理,并实现了相应的vfs方法
 SYSCALL_DEFINE2(socketcall, int, call, unsigned long __user *, args)
 {
 	unsigned long a[AUDITSC_ARGS];
@@ -2672,6 +2744,10 @@ SYSCALL_DEFINE2(socketcall, int, call, unsigned long __user *, args)
  *	socket interface. The value ops->family corresponds to the
  *	socket system call protocol family.
  */
+//ops->create在应用程序创建套接字的时候，引起系统调用，从而在函数__sock_create中执行ops->create
+//family协议族通过sock_register注册  
+// 传输层接口tcp_prot udp_prot netlink_prot等通过proto_register注册   
+// IP层接口通过inet_add_protocol(&icmp_protocol等注册 ，这些组成过程参考inet_init函数
 int sock_register(const struct net_proto_family *ops)
 {
 	int err;
@@ -2682,9 +2758,11 @@ int sock_register(const struct net_proto_family *ops)
 	}
 
 	spin_lock(&net_family_lock);
+	//如果family为PF_NETLINK,则ops为netlink_create  应用层创建netlink套接字的时候，会调用__sock_create，从而执行netlink_create函数
 	if (rcu_dereference_protected(net_families[ops->family],
 				      lockdep_is_held(&net_family_lock)))
-		err = -EEXIST;
+		err = -EEXIST; 
+	//如果family为PF_INET则为inet_creat，参考sock_register(&inet_family_ops);
 	else {
 		rcu_assign_pointer(net_families[ops->family], ops);
 		err = 0;
@@ -2728,6 +2806,11 @@ bool sock_is_registered(int family)
 	return family < NPROTO && rcu_access_pointer(net_families[family]);
 }
 
+//设备物理层的初始化net_dev_init
+ //TCP/IP协议栈初始化inet_init  其实传输层的协议初始化也在这里面
+ //传输层初始化proto_init
+ //套接口层初始化sock_init  netfilter_init在套接口层初始化的时候也初始化了
+//套接口层的初始化函数
 static int __init sock_init(void)
 {
 	int err;
@@ -2741,17 +2824,20 @@ static int __init sock_init(void)
 	/*
 	 *      Initialize skbuff SLAB cache
 	 */
+	//创建分配SKB的SLAB缓存
 	skb_init();
 
 	/*
 	 *      Initialize the protocols module.
 	 */
 
+	//创建套接口文件系统中的inode阶段SLAB缓存
 	init_inodecache();
 
 	err = register_filesystem(&sock_fs_type);
 	if (err)
 		goto out_fs;
+	//注册套接口文件系统，并把套接口文件系统挂载到文件系统列表上
 	sock_mnt = kern_mount(&sock_fs_type);
 	if (IS_ERR(sock_mnt)) {
 		err = PTR_ERR(sock_mnt);
