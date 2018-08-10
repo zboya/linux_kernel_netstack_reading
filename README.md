@@ -11,7 +11,7 @@
 ## 微信群
 想一起阅读的小伙伴可以加我微信`sheepbao-520`,加入阅读群，备注`阅读linux kernel`
 
-## githubg地址
+## github地址
 https://github.com/sheepbao/linux_kernel_netstack_reading
 
 ### 时间
@@ -53,3 +53,8 @@ linux kernel 4.17
 5. ethernet层的实现
 
 ### 目前的进度
+* 2018-08-09 大概阅读了socket层的代码
+
+### 相似的项目
+感谢以下的项目及作者，让我能够更快的理解协议栈代码  
+https://github.com/y123456yz/Reading-and-comprehense-linux-Kernel-network-protocol-stack  

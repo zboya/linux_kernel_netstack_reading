@@ -1157,6 +1157,43 @@ static int ip_setup_cork(struct sock *sk, struct inet_cork *cork,
  *
  *	LATER: length must be adjusted by pad at tail, when it is required.
  */
+/*
+ * 如果说ip_append_data()只是UDP套接字和RAW套接字的输出接口，也不完全正确，
+ * 因为在TCP中用于发送ACK和RST包的函数ip_send_reply()最终也调用了该函数。
+ * ip_append_data()是一个比较复杂的函数，主要是将接收到的大数据包分成
+ * 多个小于或等于MTU的SKB，为网络层要实现的IP分片做准备。例如，假设待发送
+ * 的数据包大小为4000B，先前输出队列非空，且最后一个SKB还未填满，剩余500B。
+ * 这时传输层调用ip_append_data(),则首先会将有剩余空间的SKB填满。当网络设备
+ * 支持聚合分散I/O时，便会将数据写到frags指向的页面中，如果相关的页面已经填满，
+ * 则会再分配一个新的页面。接着，进入下次循环，每次循环都分配一个SKB，
+ * 通过getfrag将数据从传输层复制数据，并将其添加到输出队列的末尾，直至
+ * 复制完所有待输出的数据。
+ * ip_append_data()在多处被调用，包括UDP、TCP、RAW套接字以及ICMP。因此在复制数据
+ * 时，有时复制传输层负载部分，传输层首部会后续添加(UDP),有时则需要复制包括
+ * 传输层首部的的全部数据(ICMP).参数说明如下：
+ * @sk：输出数据的传输控制块。该传输控制块还提供一些其他信息，如IP选项等。
+ * @getfrag：用于复制数据到SKB中。不同的传输层，由于特性不同，因此对应复制的
+ *           方法也不一样。该接口的参数说明如下：
+ *           1.from：标识待复制数据存储的位置
+ *           2.to：标识数据待复制到的目的地
+ *           3.offset：待复制数据在数据存储位置的偏移，数据从此位置开始复制
+ *           4.len：待复制数据的长度。
+ *           5.odd：从上一个SKB中剩余下来并复制到此SKB中的数据长度。如果为奇数，
+ *                  则后续数据的校验和计算时的16位数据的高8位和低8位的值是颠倒的，
+ *                  因此需要将后续数据的校验和高低8位对调。
+ *          6.skb：复制数据的SKB，计算得到的数据部分的校验和暂存到SKB中，为计算
+ *                 完成的传输层校验和做准备。
+ *          UDP和RAW为ip_generic_getfrag()，TCP为ip_reply_glue_bits()，ICMP为
+ *          icmp_glue_bits(),复制轻量级UDP的数据时为udplite_getfrag().
+ * @from：输出数据所在的数据块地址，它指向用户空间或内核空间，该参数为传递给
+ *        getfrag()接口
+ * @length:输出数据的长度
+ * @transhdrlen：传输层首部长度
+ * @ipc：传递到IP层的临时信息块
+ * @rt：输出该数据的路由缓存项，在调用此函数之前由传输控制块已经缓存路由缓存
+ *      项或者已经通过ip_route_output_flow()查找到了输出数据的路由缓存项
+ * @flags：输出数据的一些标志，如MSG_MORE等。
+ */
 int ip_append_data(struct sock *sk, struct flowi4 *fl4,
 		   int getfrag(void *from, char *to, int offset, int len,
 			       int odd, struct sk_buff *skb),

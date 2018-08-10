@@ -60,6 +60,11 @@
  */
 
 
+// linux内核整体分层架构
+/*
+	https://blog.csdn.net/wenqian1991/article/details/46546477
+	具体看图片 read-doc/info-center/scoket整体分层架构.png
+*/
 
 /*
 套接字层涉及的的文件：
@@ -3349,6 +3354,7 @@ static long compat_sock_ioctl(struct file *file, unsigned int cmd,
 }
 #endif
 
+// kernel_* 是封装给内核用的，也就是kernel自己用的
 int kernel_bind(struct socket *sock, struct sockaddr *addr, int addrlen)
 {
 	return sock->ops->bind(sock, addr, addrlen);

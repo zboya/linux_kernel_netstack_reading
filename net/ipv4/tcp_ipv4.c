@@ -92,6 +92,8 @@ static int tcp_v4_md5_hash_hdr(char *md5_hash, const struct tcp_md5sig_key *key,
 			       __be32 daddr, __be32 saddr, const struct tcphdr *th);
 #endif
 
+//存放在tcp_prot的h.hashinfo中  //该变量初始化赋值在tcp_init
+//tcp_prot套接口和IPV6的tcpv6_prot在这个hash表中，tcp套接字的struct sock通过inet_hash加入到该hash中 
 struct inet_hashinfo tcp_hashinfo;
 EXPORT_SYMBOL(tcp_hashinfo);
 
@@ -2427,6 +2429,11 @@ void tcp4_proc_exit(void)
 }
 #endif /* CONFIG_PROC_FS */
 
+//TCP协议传输层操作集，这个和应用层创建套接字相关
+// TCP连接建立以及数据发送的ops函数在ipv4_specific
+//tcp层的发送封装函数为tcp_transmit_skb，该函数中封装了TCP首部(包括选项字段)，tcp层封装好后，走向ip层的接口ops为ipv4_specific
+//接收的时候由tcp_protocol里面的recv函数跳转到这里面             
+// TCP的套接口层操作集在inetsw_array数组中的inet_stream_ops
 struct proto tcp_prot = {
 	.name			= "TCP",
 	.owner			= THIS_MODULE,

@@ -854,6 +854,11 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	u8  tos;
 	// 判断是不是udplite
 	int err, is_udplite = IS_UDPLITE(sk);
+	/**
+	 * 局部标志corkreq的初始化取决于多个因素，而此标志会传给ip_append_data，用于指出是否应该使用缓冲区机制。其中一些因素是：
+	 *		MSG_MORE：				此标志可以在每次传输请求时单独设定或清除。
+	 *		corkflag（UDP_CORE）：	这个标志只会对套接字设定一次，然后一直保持不变，直到显式的被关闭为止。
+	 */
 	int corkreq = up->corkflag || msg->msg_flags&MSG_MORE;
 	int (*getfrag)(void *, char *, int, int, int, struct sk_buff *);
 	struct sk_buff *skb;
@@ -866,7 +871,7 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	/*
 	 *	Check the flags.
 	 */
-
+	/* UDP不支持带外数据的发送 */
 	if (msg->msg_flags & MSG_OOB) /* Mirror BSD error message compatibility */
 		return -EOPNOTSUPP;
 
@@ -878,7 +883,7 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	getfrag = is_udplite ? udplite_getfrag : ip_generic_getfrag;
 
 	fl4 = &inet->cork.fl.u.ip4;
-	if (up->pending) {
+	if (up->pending) { /* UDP正在输出数据 */
 		/*
 		 * There are pending frames.
 		 * The socket lock must be held while it's corked.
@@ -889,30 +894,31 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 				release_sock(sk);
 				return -EINVAL;
 			}
-			goto do_append_data;
+			goto do_append_data; /* 确实在输出数据，跳转到do_append_data直接处理UDP数据 */
 		}
 		release_sock(sk);
 	}
-	ulen += sizeof(struct udphdr);
+	ulen += sizeof(struct udphdr); /* 计算UDP报文总长度 */
 
 	/*
 	 *	Get and verify the address.
 	 */
-	if (msg->msg_name) {
+	if (msg->msg_name) { /* 处理msg中带有目的地址的情况，即应用程序通过sendto调用本函数 */
 		DECLARE_SOCKADDR(struct sockaddr_in *, usin, msg->msg_name);
-		if (msg->msg_namelen < sizeof(*usin))
+		if (msg->msg_namelen < sizeof(*usin)) /* 检查目的地址长度 */
 			return -EINVAL;
-		if (usin->sin_family != AF_INET) {
+		if (usin->sin_family != AF_INET) { /* 检查协议族 */
 			if (usin->sin_family != AF_UNSPEC)
 				return -EAFNOSUPPORT;
 		}
 
-		// 获取目标地址和目标端口
+		/* 缓存目的地址和端口 */
 		daddr = usin->sin_addr.s_addr;
 		dport = usin->sin_port;
 		if (dport == 0)
 			return -EINVAL;
 	} else {
+		/* 没有指定目的地址，并且以前没有调用过connect */ //也就是说udp发送send的时候可以不指定目的地址，但必须在发送前connect。就和TCP一样
 		if (sk->sk_state != TCP_ESTABLISHED)
 			return -EDESTADDRREQ;
 		// 获取目标地址和目标端口
@@ -921,7 +927,7 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 		/* Open fast path for connected socket.
 		   Route will not be used, if at least one option is set.
 		 */
-		connected = 1;
+		connected = 1; /* 后续处理路由时用 */
 	}
 
 	ipc.sockc.tsflags = sk->sk_tsflags;
@@ -929,16 +935,19 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	ipc.oif = sk->sk_bound_dev_if;
 
 	if (msg->msg_controllen) {
+		/* 处理控制信息，如IP选项，源地址和源设备索引 */
 		err = ip_cmsg_send(sk, msg, &ipc, sk->sk_family == AF_INET6);
 		if (unlikely(err)) {
 			kfree(ipc.opt);
 			return err;
 		}
+		/* 有选项信息，则设置free标志，表示选项是在ip_cmsg_send中分配的 */
 		if (ipc.opt)
 			free = 1;
 		connected = 0;
 	}
 	if (!ipc.opt) {
+		/* 没有指定选项，则使用套接口结构中的选项，它是用IP_OPTIONS套接口选项设置的 */
 		struct ip_options_rcu *inet_opt;
 
 		rcu_read_lock();
@@ -956,29 +965,34 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 
 	sock_tx_timestamp(sk, ipc.sockc.tsflags, &ipc.tx_flags);
 
-	if (ipc.opt && ipc.opt->opt.srr) {
+	if (ipc.opt && ipc.opt->opt.srr) { /* 指定了选路信息 */
 		if (!daddr) {
 			err = -EINVAL;
 			goto out_free;
 		}
+		/* 目的地址应当是第一个源路由 */
 		faddr = ipc.opt->opt.faddr;
 		connected = 0;
 	}
 	tos = get_rttos(&ipc, inet);
+	/* 如果设置了SO_DONTROUTE或者发送时设置了MSG_DONTROUTE */
+	/* 或者设置了严格源站选路 */
 	if (sock_flag(sk, SOCK_LOCALROUTE) ||
 	    (msg->msg_flags & MSG_DONTROUTE) ||
 	    (ipc.opt && ipc.opt->opt.is_strictroute)) {
-		tos |= RTO_ONLINK;
+		tos |= RTO_ONLINK; /* 此标志表示下一站必定位于本地子网 */
 		connected = 0;
 	}
 
-	// 看是不是多播地址
+	// 看是不是组播地址
 	if (ipv4_is_multicast(daddr)) {
+		/* 没有指定组播输出网络设备，则使用IP_MULTICAST_IF选项设置的默认组播设备 */
 		if (!ipc.oif)
 			ipc.oif = inet->mc_index;
-		if (!saddr)
+		/* 没有指定组播源地址，则使用IP_MULTICAST_IF选项设置的默认组播地址 */
+		if (!saddr) 
 			saddr = inet->mc_addr;
-		connected = 0;
+		connected = 0; /* 由于是组播报文，因此需要在路由表中查找路由 */
 	} else if (!ipc.oif) {
 		ipc.oif = inet->uc_index;
 	} else if (ipv4_is_lbcast(daddr) && inet->uc_index) {
@@ -996,8 +1010,10 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	}
 
 	if (connected)
+		/* 获取路由缓存项 */
 		rt = (struct rtable *)sk_dst_check(sk, 0);
 
+	// 对于未建立连接的UDP套接口，或者指定了控制信息，或者是组播报文
 	if (!rt) {
 		struct net *net = sock_net(sk);
 		__u8 flow_flags = inet_sk_flowi_flags(sk);
@@ -1011,6 +1027,7 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 				   sk->sk_uid);
 
 		security_sk_classify_flow(sk, flowi4_to_flowi(fl4));
+		/* 在路由表中查询路由 */
 		rt = ip_route_output_flow(net, fl4, sk);
 		if (IS_ERR(rt)) {
 			err = PTR_ERR(rt);
@@ -1022,19 +1039,19 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 
 		err = -EACCES;
 		if ((rt->rt_flags & RTCF_BROADCAST) &&
-		    !sock_flag(sk, SOCK_BROADCAST))
+		    !sock_flag(sk, SOCK_BROADCAST)) /* 广播地址，但是不允许进行广播，退出 */
 			goto out;
-		if (connected)
+		if (connected) /* 如果已经调用了connect，则缓存本次查询到的路由 */
 			sk_dst_set(sk, dst_clone(&rt->dst));
 	}
 
-	if (msg->msg_flags&MSG_CONFIRM)
+	if (msg->msg_flags&MSG_CONFIRM) /* 用户层确认路径 */
 		goto do_confirm;
 back_from_confirm:
 
-	saddr = fl4->saddr;
+	saddr = fl4->saddr; /* 从路由中获取源地址和目的地址 */
 	if (!ipc.addr)
-		daddr = ipc.addr = fl4->daddr;
+		daddr = ipc.addr = fl4->daddr; 
 
 	/* Lockless fast path for the non-corking case. */
 	if (!corkreq) {
@@ -1065,23 +1082,26 @@ back_from_confirm:
 	fl4->saddr = saddr;
 	fl4->fl4_dport = dport;
 	fl4->fl4_sport = inet->inet_sport;
-	up->pending = AF_INET;
+	up->pending = AF_INET; /* 此标志表示正在发送数据 */
 
 do_append_data:
+	/* 累计发送报文长度 */
 	up->len += ulen;
+	// 发送数据给ip层，让ip层自己分片
 	err = ip_append_data(sk, fl4, getfrag, msg, ulen,
 			     sizeof(struct udphdr), &ipc, &rt,
 			     corkreq ? msg->msg_flags|MSG_MORE : msg->msg_flags);
 	if (err)
 		udp_flush_pending_frames(sk);
 	else if (!corkreq)
+		/* 没有后续数据或者IP选项不缓存数据，则调用udp_push_pending_frames发送数据 */
 		err = udp_push_pending_frames(sk);
 	else if (unlikely(skb_queue_empty(&sk->sk_write_queue)))
 		up->pending = 0;
 	release_sock(sk);
 
 out:
-	ip_rt_put(rt);
+	ip_rt_put(rt); /* 发送完成，递减对路由的引用 */
 out_free:
 	if (free)
 		kfree(ipc.opt);
@@ -1100,8 +1120,8 @@ out_free:
 	}
 	return err;
 
-do_confirm:
-	if (msg->msg_flags & MSG_PROBE)
+do_confirm: /* 发送数据时设置了MSG_CONFIRM标志 */
+	if (msg->msg_flags & MSG_PROBE) /* MSG_PROBE标志表示仅仅用来发现路径，并不正直发送数据。如果没有指定这个标志，则发送数据 */
 		dst_confirm_neigh(&rt->dst, &fl4->daddr);
 	if (!(msg->msg_flags&MSG_PROBE) || len)
 		goto back_from_confirm;
@@ -2550,6 +2570,8 @@ EXPORT_SYMBOL_GPL(udp_abort);
 
 // udp传输层操作集
 // 重点关注udp_sendmsg，udp_recvmsg
+// 由udp_protocol里面的recv函数跳转到这里面             
+// UDP的套接口层操作集在inetsw_array数组中的inet_dgram_ops
 struct proto udp_prot = {
 	.name			= "UDP",
 	.owner			= THIS_MODULE,
@@ -2568,7 +2590,7 @@ struct proto udp_prot = {
 	.release_cb		= ip4_datagram_release_cb,
 	.hash			= udp_lib_hash,
 	.unhash			= udp_lib_unhash,
-	.rehash			= udp_v4_rehash,
+	.rehash			= udp_v4_rehash,  //udp的hash使用rehash来把struct sock添加到udp_table hash表中
 	.get_port		= udp_v4_get_port,
 	.memory_allocated	= &udp_memory_allocated,
 	.sysctl_mem		= sysctl_udp_mem,
