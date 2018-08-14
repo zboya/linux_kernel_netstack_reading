@@ -6205,6 +6205,7 @@ static void tcp_reqsk_record_syn(const struct sock *sk,
 	}
 }
 
+// 服务端处理sync请求，由tcp_v4_conn_request调用
 int tcp_conn_request(struct request_sock_ops *rsk_ops,
 		     const struct tcp_request_sock_ops *af_ops,
 		     struct sock *sk, struct sk_buff *skb)
@@ -6225,17 +6226,42 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 	 * evidently real one.
 	 */
 	if ((net->ipv4.sysctl_tcp_syncookies == 2 ||
+		/*
+		* 如果SYN请求连接队列已满并且isn为零，则需做特别处理。
+		* 这里的isn就是TCP_SKB_CB(skb)->when，而TCP_SKB_CB(skb)->when
+		* 在TCP接收处理一开始就被清零，因此这里isn为零总是成立
+		*/
 	     inet_csk_reqsk_queue_is_full(sk)) && !isn) {
 		want_cookie = tcp_syn_flood_action(sk, skb, rsk_ops->slab_name);
 		if (!want_cookie)
 			goto drop;
 	}
 
+	/*
+	 * 如果连接队列长度已达到上限且SYN请求队列中至少有一个握手过程中
+	 * 没有重传过的段，则丢弃当前连接请求.
+	 *  如果半连接队列中未重传的请求块数量大于1，
+	 * 则表示未来可能有2个完成的连接，这些新完成
+	 * 的连接要放到连接队列中，但此时连接队列已满
+	 * 。如果在接收到三次握手中最后的ACK后连接队列
+	 * 中没有空闲的位置，会忽略接收到的ACK包，连接
+	 * 建立会推迟，所以此时最好丢掉部分新的连接请
+	 * 求，空出资源以完成正在进行的连接建立过程。
+	 * 还要注意，这个判断并没有考虑半连接队列是否
+	 * 已满的问题。从这里可以看出，即使开启了
+	 * SYN cookies机制并不意味着一定可以完成连接的建立。
+	 * 
+	 */
 	if (sk_acceptq_is_full(sk)) {
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_LISTENOVERFLOWS);
 		goto drop;
 	}
 
+	/*
+	 * 可以接收并处理连接请求，调用inet_reqsk_alloc()分配一个连接请求
+	 * 块，用于保存连接请求信息，同时初始化在建立连接过程中用来发送
+	 * ACK、RST段的操作集合，以便在建立连接过程中能方便地调用这些接口
+	 */
 	req = inet_reqsk_alloc(rsk_ops, sk, !want_cookie);
 	if (!req)
 		goto drop;
@@ -6312,6 +6338,7 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 		fastopen_sk = tcp_try_fastopen(sk, skb, req, &foc, dst);
 	}
 	if (fastopen_sk) {
+		// 调用af_ops->send_synack发送SYN+ACK段给客户端
 		af_ops->send_synack(fastopen_sk, dst, &fl, req,
 				    &foc, TCP_SYNACK_FASTOPEN);
 		/* Add the child socket directly into the accept queue */

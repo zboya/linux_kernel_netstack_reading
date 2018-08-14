@@ -1074,6 +1074,10 @@ static struct dst_entry *inet_csk_rebuild_route(struct sock *sk, struct flowi *f
 
 struct dst_entry *inet_csk_update_pmtu(struct sock *sk, u32 mtu)
 {
+	 /*
+     * 检测当前传输控制块的路由缓存项是否可用。如果
+     * 失效，则不继续处理。
+     */
 	struct dst_entry *dst = __sk_dst_check(sk, 0);
 	struct inet_sock *inet = inet_sk(sk);
 
@@ -1082,6 +1086,13 @@ struct dst_entry *inet_csk_update_pmtu(struct sock *sk, u32 mtu)
 		if (!dst)
 			goto out;
 	}
+	/*
+     * 在没有锁定路由缓存项的度量值的情况下，将获取的
+     * 下一跳MTU更新到与路由相关的路由缓存项的度量值中。
+     * 如果存储在路由缓存项的度量值中的PTMU大于下一跳的
+     * MTU，且发送出的IP数据包禁止分片，则需报告相应的
+     * 错误。
+     */
 	dst->ops->update_pmtu(dst, sk, NULL, mtu);
 
 	dst = __sk_dst_check(sk, 0);
