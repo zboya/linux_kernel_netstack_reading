@@ -1676,6 +1676,8 @@ enum netdev_priv_flags {
  *	moves out.
  */
 
+// net_device是网络驱动及接口层最重要的一个结构
+// 描述了接口，硬件等信息
 struct net_device {
 	char			name[IFNAMSIZ];
 	struct hlist_node	name_hlist;

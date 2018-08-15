@@ -115,6 +115,7 @@ int __ip_local_out(struct net *net, struct sock *sk, struct sk_buff *skb)
 		       dst_output);
 }
 
+//通过ip_local_out最终会走到IP层输出函数dev_queue_xmit
 int ip_local_out(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
 	int err;
@@ -181,6 +182,10 @@ int ip_build_and_send_pkt(struct sk_buff *skb, const struct sock *sk,
 }
 EXPORT_SYMBOL_GPL(ip_build_and_send_pkt);
 
+/*
+ * 此函数通过邻居子系统将数据包输出
+ * 到网络设备。
+ */
 static int ip_finish_output2(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
 	struct dst_entry *dst = skb_dst(skb);
@@ -222,6 +227,13 @@ static int ip_finish_output2(struct net *net, struct sock *sk, struct sk_buff *s
 	neigh = __ipv4_neigh_lookup_noref(dev, nexthop);
 	if (unlikely(!neigh))
 		neigh = __neigh_create(&arp_tbl, &nexthop, dev, false);
+
+	/*
+	 * 如果缓存了链路层的首部，则调用
+	 * neigh_hh_output()输出数据包。否则，
+	 * 若存在对应的邻居项，则通过
+	 * 邻居项的输出方法输出数据包。
+	 */ //最后调用二层函数dev_queue_xmit
 	if (!IS_ERR(neigh)) {
 		int res;
 
@@ -393,6 +405,9 @@ int ip_mc_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 			    !(IPCB(skb)->flags & IPSKB_REROUTED));
 }
 
+/*
+ * 对于单播数据包，目的路由缓存项中的输出接口是ip_output().
+ */
 int ip_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
 	struct net_device *dev = skb_dst(skb)->dev;
@@ -402,6 +417,9 @@ int ip_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 	skb->dev = dev;
 	skb->protocol = htons(ETH_P_IP);
 
+	/*
+	 * 经netfilter处理后，调用ip_finish_output()继续IP数据包的输出
+	 */
 	return NF_HOOK_COND(NFPROTO_IPV4, NF_INET_POST_ROUTING,
 			    net, sk, skb, NULL, dev,
 			    ip_finish_output,

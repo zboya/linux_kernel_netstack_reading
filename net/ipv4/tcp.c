@@ -1191,6 +1191,7 @@ static int tcp_sendmsg_fastopen(struct sock *sk, struct msghdr *msg,
 	return err;
 }
 
+// 由tcp_sendmsg调用
 int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -1231,7 +1232,7 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 		else if (err)
 			goto out_err;
 	}
-
+	// 取得发送超时时间
 	timeo = sock_sndtimeo(sk, flags & MSG_DONTWAIT);
 
 	tcp_rate_check_app_limited(sk);  /* is sending application-limited? */
@@ -1459,6 +1460,9 @@ out_err:
 EXPORT_SYMBOL_GPL(tcp_sendmsg_locked);
 
 // tcp 发送上层的数据包
+// tcp发送数据最终都会调用到tcp_sendmsg,举个例子吧,比如send系统调用
+// send系统调用会直接调用sys_sendto,然后填充msghdr数据结构,并调用sock_sendmsg,
+// 最终会调 用__sock_sendmsg.在这个函数里面会初始化sock_iocb结构,然后调用tcp_sendmsg.
 int tcp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 {
 	int ret;

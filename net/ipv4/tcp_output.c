@@ -3181,6 +3181,7 @@ int __tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb, int segs)
 	return err;
 }
 
+// tcp重传一个skb，最终调用__tcp_retransmit_skb实现
 int tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb, int segs)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -3306,6 +3307,17 @@ void sk_forced_mem_schedule(struct sock *sk, int size)
 /* Send a FIN. The caller locks the socket for us.
  * We should try to send a FIN packet really hard, but eventually give up.
  */
+/*
+ * tcp_send_fin()的实现比较简单，过程大致如下:
+ * 1)由于发送FIN无需占用额外的负载，因此如果发送队列不空，
+ *    则在发送队列的最后一个TCP段上设置FIN标志。但FIN标志会
+ *    占用一个序号，因此需递增序号。
+ * 2)如果发送队列为空，则需构造一个新的TCP段，但该TCP段不需要
+ *    负荷，只需要TCP首部即可。设置相应的值，然后添加到
+ *    发送队列中。
+ * 3)最后关闭Nagle算法，立即将发送队列上未发送的段(包括FIN段)全部
+ *    发送出去。
+ */
 void tcp_send_fin(struct sock *sk)
 {
 	struct sk_buff *skb, *tskb = tcp_write_queue_tail(sk);
@@ -3320,6 +3332,11 @@ void tcp_send_fin(struct sock *sk)
 		tskb = skb_rb_last(&sk->tcp_rtx_queue);
 
 	if (tskb) {
+	/*
+	 * 如果发送队列不为空，则在最后一个要发送的SKB包中加入
+	 * FIN标志，更新其结束序列号。更新sock结构中的最后一个加入
+	 * 到发送队列的字节的序列号
+	 */
 coalesce:
 		TCP_SKB_CB(tskb)->tcp_flags |= TCPHDR_FIN;
 		TCP_SKB_CB(tskb)->end_seq++;
@@ -3345,10 +3362,22 @@ coalesce:
 		skb_reserve(skb, MAX_TCP_HEADER);
 		sk_forced_mem_schedule(sk, skb->truesize);
 		/* FIN eats a sequence byte, write_seq advanced by tcp_queue_skb(). */
+		/*
+         * 注意在发送FIN包时，会同时设置TCPCB_FLAG_ACK和TCPCB_FLAG_FIN标志，
+         * 所以FIN包中TCP首部的ack标志和fin标志都会设置。
+         */
 		tcp_init_nondata_skb(skb, tp->write_seq,
 				     TCPHDR_ACK | TCPHDR_FIN);
+		/*
+		 * 将skb包加入到发送队列中
+		 */
 		tcp_queue_skb(sk, skb);
 	}
+	/*
+	 * 如果发送队列不为空，并且sock状态不是TCP_CLOSE，则将发送队列中
+	 * 未发送的SKB包发送出去。
+	 */ 
+	//把整个发送队列中的SKB数据都发送出去
 	__tcp_push_pending_frames(sk, tcp_current_mss(sk), TCP_NAGLE_OFF);
 }
 
@@ -3548,6 +3577,7 @@ static void tcp_ca_dst_init(struct sock *sk, const struct dst_entry *dst)
 }
 
 /* Do all connect socket setups that can be done AF independent. */
+/* 初始化传输控制块中与连接相关的成员 */ 
 static void tcp_connect_init(struct sock *sk)
 {
 	const struct dst_entry *dst = __sk_dst_get(sk);
@@ -3847,6 +3877,16 @@ void tcp_send_delayed_ack(struct sock *sk)
 }
 
 /* This routine sends an ack and also updates the window. */
+/*
+ * tcp_send_ack()用来发送一个ACK段，同时更新窗口。
+ * 1)发送ACK段时，TCP必须不在CLOSE状态
+ * 2)为ACK段分配一个SKB，如果分配失败则在启动延时
+ *    确认定时器后返回。
+ * 3)如果分配SKB成功，则设置SKB中相关的参数，如标志
+ *   和gso属性等。
+ * 4)最后设置TCP序号和发送时间，调用tcp_transmit_skb()将
+ *    该ACK段发送出去。
+ */
 void tcp_send_ack(struct sock *sk)
 {
 	struct sk_buff *buff;
@@ -3930,6 +3970,20 @@ void tcp_send_window_probe(struct sock *sk)
 }
 
 /* Initiate keepalive or window probe from timer. */
+/*
+ * tcp_write_wakeup()用来输出持续探测段。如果传输
+ * 控制块处于关闭状态，则直接返回失败，否
+ * 则传输持续探测段，过程如下:
+ * 1)如果发送队列不为空，则利用那些待发送
+ *    段来发送探测段，当然这些待发送的段至
+ *     少有一部分在对方的接收窗口内。
+ * 2)如果发送队列为空，则构造需要已确认，
+ *    长度为零的段发送给对端。
+ * 其返回值如下:
+ *  0: 表示发送持续探测段成功
+ *  小于0: 表示发送持续探测段失败
+ *  大于0: 表示由于本地拥塞而导致发送持续探测段失败。
+ */
 int tcp_write_wakeup(struct sock *sk, int mib)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -3940,16 +3994,37 @@ int tcp_write_wakeup(struct sock *sk, int mib)
 
 	skb = tcp_send_head(sk);
 	if (skb && before(TCP_SKB_CB(skb)->seq, tcp_wnd_end(tp))) {
+		/*
+		 * 如果发送队列中有段需要发送，并且最先
+		 * 待发送的段至少有一部分在对端接收窗口
+		 * 内，那么可以直接利用该待发送的段来发
+		 * 送持续探测段。
+		 */
 		int err;
+		/*
+		 * 获取当前的MSS以及待分段的段长。分段得到
+		 * 的新段必须在对方接收窗口内，待分段的段
+		 * 长初始化为SND.UNA-SND_WND-SKB.seq.
+		 */
 		unsigned int mss = tcp_current_mss(sk);
 		unsigned int seg_size = tcp_wnd_end(tp) - TCP_SKB_CB(skb)->seq;
 
+		/*
+		 * 如果该段的序号已经大于pushed_seq，则需要
+		 * 更新pushed_seq。
+		 */
 		if (before(tp->pushed_seq, TCP_SKB_CB(skb)->end_seq))
 			tp->pushed_seq = TCP_SKB_CB(skb)->end_seq;
 
 		/* We are probing the opening of a window
 		 * but the window size is != 0
 		 * must have been a result SWS avoidance ( sender )
+		 */
+		/*
+		 * 如果待分段段长大于剩余等待发送数据，或者段长度
+		 * 大于当前MSS，则对该段进行分段，分段段长取待分段
+		 * 段长与当前MSS两者中的最小值，以保证只发送出一个
+		 * 段到对方。
 		 */
 		if (seg_size < TCP_SKB_CB(skb)->end_seq - TCP_SKB_CB(skb)->seq ||
 		    skb->len > mss) {
@@ -3961,12 +4036,21 @@ int tcp_write_wakeup(struct sock *sk, int mib)
 		} else if (!tcp_skb_pcount(skb))
 			tcp_set_skb_tso_segs(skb, mss);
 
+		/*
+		 * 将探测段发送出去，如果发送成功，
+		 * 则更新发送队首等标志。
+		 */
 		TCP_SKB_CB(skb)->tcp_flags |= TCPHDR_PSH;
 		err = tcp_transmit_skb(sk, skb, 1, GFP_ATOMIC);
 		if (!err)
 			tcp_event_new_data_sent(sk, skb);
 		return err;
 	} else {
+		 /*
+		 * 如果发送队列为空，则构造并发送一个需要已确认、
+		 * 长度为零的段给对端。如果处于紧急模式，则多发送
+		 * 一个序号为SND.UNA的段给对端。
+		 */
 		if (between(tp->snd_up, tp->snd_una + 1, tp->snd_una + 0xFFFF))
 			tcp_xmit_probe_skb(sk, 1, mib);
 		return tcp_xmit_probe_skb(sk, 0, mib);
@@ -3976,6 +4060,10 @@ int tcp_write_wakeup(struct sock *sk, int mib)
 /* A window probe timeout has occurred.  If window is not closed send
  * a partial packet else a zero probe.
  */
+/*
+ * 当持续定时器超时之后，会调用tcp_send_probe0()
+ * 进行探测。
+ */
 void tcp_send_probe0(struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
@@ -3984,8 +4072,16 @@ void tcp_send_probe0(struct sock *sk)
 	unsigned long probe_max;
 	int err;
 
+    /*
+	 * 输出持续探测段。
+	 */
 	err = tcp_write_wakeup(sk, LINUX_MIB_TCPWINPROBE);
 
+	/*
+	 * 如果有已发送但未确认的段，或者发送队列为空，
+	 * 这两种情况都无需再发送持续探测段了，因此需要
+	 * 将icsk_probes_out和icsk_backoff清零，然后返回。
+	 */
 	if (tp->packets_out || tcp_write_queue_empty(sk)) {
 		/* Cancel probe timer, if it is not required. */
 		icsk->icsk_probes_out = 0;
@@ -3993,6 +4089,10 @@ void tcp_send_probe0(struct sock *sk)
 		return;
 	}
 
+	/*
+	 * 如果重传成功或并非由于本地拥塞而发送失败，
+	 * 则更新icsk_backoff和icsk_probes_out，然后复位持续定时器。
+	 */
 	if (err <= 0) {
 		if (icsk->icsk_backoff < net->ipv4.sysctl_tcp_retries2)
 			icsk->icsk_backoff++;
@@ -4004,6 +4104,11 @@ void tcp_send_probe0(struct sock *sk)
 		 * Let local senders to fight for local resources.
 		 *
 		 * Use accumulated backoff yet.
+		 */
+		 /*
+		 * 如果由于本地拥塞而导致发送失败，则不需要累计
+		 * icsk_probes_out，同时复位持续定时器，缩短超时时间，
+		 * 尽可能争取资源。
 		 */
 		if (!icsk->icsk_probes_out)
 			icsk->icsk_probes_out = 1;

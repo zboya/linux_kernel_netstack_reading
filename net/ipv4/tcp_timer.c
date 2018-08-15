@@ -188,6 +188,10 @@ static bool retransmits_timed_out(struct sock *sk,
 }
 
 /* A write timeout has occurred. Process the after effects. */
+/*
+ * 当发生重传之后,需要检测当前的资源使用
+ * 情况.如果重传达到上限则需要立即关闭套接字
+ */
 static int tcp_write_timeout(struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
@@ -196,6 +200,10 @@ static int tcp_write_timeout(struct sock *sk)
 	bool expired, do_reset;
 	int retry_until;
 
+	/*
+	 * 在建立连接阶段超时,则需要检测使用的
+	 * 路由缓存项,并获取重试次数的最大值.
+	 */
 	if ((1 << sk->sk_state) & (TCPF_SYN_SENT | TCPF_SYN_RECV)) {
 		if (icsk->icsk_retransmits) {
 			dst_negative_advice(sk);
@@ -205,6 +213,16 @@ static int tcp_write_timeout(struct sock *sk)
 		retry_until = icsk->icsk_syn_retries ? : net->ipv4.sysctl_tcp_syn_retries;
 		expired = icsk->icsk_retransmits >= retry_until;
 	} else {
+		/*
+		 * 当重传次数达到sysctl_tcp_retries1时,则需要进行
+		 * 黑洞检测.完成黑洞检测后还需检测使用的
+		 * 路由缓存项.
+		 * 系统启用路径MTU发现时,如果路径MTU发现的
+		 * 控制数据块中的开关没有开启,则将其开启,
+		 * 并根据PMTU同步MSS.否则,将当前路径MTU发现
+		 * 区间左端点的一半作为新区间的左端点重新
+		 * 设定路径MTU发现区间,并根据路径MTU同步MSS.
+		 */
 		if (retransmits_timed_out(sk, net->ipv4.sysctl_tcp_retries1, 0)) {
 			/* Black hole detection */
 			tcp_mtu_probing(icsk, sk);
@@ -214,6 +232,14 @@ static int tcp_write_timeout(struct sock *sk)
 			sk_rethink_txhash(sk);
 		}
 
+		/*
+		 * 如果当前套接字连接已断开并即将关闭,则
+		 * 需要对当前使用的资源进行检测.当前的孤
+		 * 儿套接字数量达到sysctl_tcp_max_orphans或者当前
+		 * 已使用内存达到硬性限制时,需要即刻关闭
+		 * 该套接字,这虽然不符合TCP的规范,但为了防
+		 * 止DoS攻击必须这么处理.
+		 */
 		retry_until = net->ipv4.sysctl_tcp_retries2;
 		if (sock_flag(sk, SOCK_DEAD)) {
 			const bool alive = icsk->icsk_rto < TCP_RTO_MAX;
@@ -235,6 +261,12 @@ static int tcp_write_timeout(struct sock *sk)
 				  icsk->icsk_retransmits,
 				  icsk->icsk_rto, (int)expired);
 
+	/*
+	 * 当重传次数达到建立连接重传上限、超时
+	 * 重传上限或确认连接异常期间重试上限这
+	 * 三种上限之一时，都必须关闭套接字，并
+	 * 且需要报告相应的错误。
+	 */
 	if (expired) {
 		/* Has it gone just too far? */
 		tcp_write_err(sk);
@@ -249,18 +281,38 @@ void tcp_delack_timer_handler(struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
 
+	 /*
+	 * 回收缓存
+	 */
 	sk_mem_reclaim_partial(sk);
 
+	/*
+	 * 如果TCP状态为CLOSE，或者没有启动延时发送
+	 * ACK定时器，则无需作进一步处理。
+	 */
 	if (((1 << sk->sk_state) & (TCPF_CLOSE | TCPF_LISTEN)) ||
 	    !(icsk->icsk_ack.pending & ICSK_ACK_TIMER))
 		goto out;
 
+	 /*
+	 * 如果超时时间还未到，则重新复位定时器，
+	 * 然后退出。
+	 */
 	if (time_after(icsk->icsk_ack.timeout, jiffies)) {
 		sk_reset_timer(sk, &icsk->icsk_delack_timer, icsk->icsk_ack.timeout);
 		goto out;
 	}
+	/*
+	 * 检测完成后，正式进入延迟确认处理之前，
+	 * 需去掉ICSK_ACK_TIMER标志。
+	 */
 	icsk->icsk_ack.pending &= ~ICSK_ACK_TIMER;
 
+	/*
+	 * 如果此时有ACK需要发送，则调用tcp_send_ack()构造
+	 * 并发送ACK段，在发送ACK段之前需先离开pingpong
+	 * 模式，并重新设定延时确认的估算值。
+	 */
 	if (inet_csk_ack_scheduled(sk)) {
 		if (!icsk->icsk_ack.pingpong) {
 			/* Delayed ACK missed: inflate ATO. */
@@ -292,6 +344,12 @@ out:
  *
  *  Returns: Nothing (void)
  */
+/*
+ * 延时ACK"定时器在TCP收到必须被确认但无需马上发出
+ * 确认的段时设定，TCP在200ms后发送确认响应。如果在
+ * 这200ms内，有数据要在该连接上发送，延时ACK响应就
+ * 可随数据一起发送回对端，称为捎带确认。
+ */
 static void tcp_delack_timer(struct timer_list *t)
 {
 	struct inet_connection_sock *icsk =
@@ -299,6 +357,12 @@ static void tcp_delack_timer(struct timer_list *t)
 	struct sock *sk = &icsk->icsk_inet.sk;
 
 	bh_lock_sock(sk);
+	/*
+	 * 如果传输控制块已被用户进程锁定，
+	 * 则此时不能作处理，只是重新设置
+	 * 定时器超时时间，同时设置blocked
+	 * 标记。
+	 */
 	if (!sock_owned_by_user(sk)) {
 		tcp_delack_timer_handler(sk);
 	} else {
@@ -312,6 +376,19 @@ static void tcp_delack_timer(struct timer_list *t)
 	sock_put(sk);
 }
 
+/*
+ * "持续"定时器在对端通告接收窗口为0，阻止TCP继续发送
+ * 数据时设定。由于连接对端发送的窗口通告不可靠(只有
+ * 数据才会确认，ACK不会确认)，允许TCP继续发送数据的后
+ * 续窗口更新有可能丢失，因此，如果TCP有数据发送，而
+ * 对端通告接收窗口为0，则持续定时器启动，超时后向
+ * 对端发送1字节的数据，以判断对端接收窗口是否已打开。
+ * 与重传定时器类似，持续定时器的超时值也是动态计算的，
+ * 取决于连接的往返时间，在5~60s之间取值。
+ * tcp_probe_timer()为持续定时器超时的处理函数。探测定时器就是当接收到对端的window为0的时候，需要探测对端窗口是否变大，
+ */ 
+//真正的probe报文发送在tcp_send_probe0中的tcp_write_wakeup  
+//tcp_write_timer包括数据报重传tcp_retransmit_timer和窗口探测定时器tcp_probe_timer
 static void tcp_probe_timer(struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
@@ -342,12 +419,29 @@ static void tcp_probe_timer(struct sock *sk)
 		goto abort;
 
 	max_probes = sock_net(sk)->ipv4.sysctl_tcp_retries2;
+	/*
+	 * 处理连接已断开，套接字即将关闭的情况
+	 */
 	if (sock_flag(sk, SOCK_DEAD)) {
+		 /*
+		 * TCP协议规定RTT的最大值为120s(TCP_RTO_MAX)，因此
+		 * 可以通过将指数退避算法得出的超时时间与
+		 * RTT最大值相比，来判断是否需要给对方发送
+		 * RST。
+		 */
 		const bool alive = inet_csk_rto_backoff(icsk, TCP_RTO_MAX) < TCP_RTO_MAX;
 
+		 /*
+		 * 如果连接已断开，套接字即将关闭，则获取在
+		 * 关闭本端TCP连接前重试次数的上限。
+		 */
 		max_probes = tcp_orphan_retries(sk, alive);
 		if (!alive && icsk->icsk_backoff >= max_probes)
 			goto abort;
+		 /*
+		 * 释放资源，如果该套接字在释放过程中被关闭，
+		 * 就无需再发送持续探测段了。
+		 */
 		if (tcp_out_of_resources(sk, true))
 			return;
 	}
@@ -356,6 +450,9 @@ static void tcp_probe_timer(struct sock *sk)
 abort:		tcp_write_err(sk);
 	} else {
 		/* Only send another probe if we didn't close things up. */
+		/*
+		 * 否则，再一次发送持续定时器。
+		 */
 		tcp_send_probe0(sk);
 	}
 }
@@ -402,6 +499,9 @@ static void tcp_fastopen_synack_timer(struct sock *sk)
  *
  *  Returns: Nothing (void)
  */
+//tcp_write_timer包括数据报重传tcp_retransmit_timer和窗口探测定时器tcp_probe_timer
+//见tcp_event_new_data_sent，prior_packets为0时才会重启定时器,而prior_packets则是发送未确认的段的个数,也就是说如果发送了很多段,如果前面的段没有确认,那么后面发送的时候不会重启这个定时器.
+//tcp_rearm_rto ///为0说明所有的传输的段都已经acked。此时remove定时器。否则重启定时器。  
 void tcp_retransmit_timer(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -417,6 +517,10 @@ void tcp_retransmit_timer(struct sock *sk)
 		 */
 		return;
 	}
+	/*
+	 * 如果此时从发送队列输出的段都已
+	 * 得到了确认,则无需重传处理.
+	 */
 	if (!tp->packets_out)
 		goto out;
 
@@ -424,6 +528,12 @@ void tcp_retransmit_timer(struct sock *sk)
 
 	tp->tlp_high_seq = 0;
 
+	/*
+	 * 在重传过程中，如果超时重传超时上限TCP_RTO_MAX(120s)还没有接收
+	 * 到对方的确认，则认为有错误发生，调用tcp_write_err()报告错误并
+	 * 关闭套接字，然后返回；否则TCP进入拥塞控制的LOSS状态，并重新
+	 * 传送重传队列中的第一个段。
+	 */
 	if (!tp->snd_wnd && !sock_flag(sk, SOCK_DEAD) &&
 	    !((1 << sk->sk_state) & (TCPF_SYN_SENT | TCPF_SYN_RECV))) {
 		/* Receiver dastardly shrinks window. Our retransmits
@@ -448,19 +558,43 @@ void tcp_retransmit_timer(struct sock *sk)
 					    tp->snd_una, tp->snd_nxt);
 		}
 #endif
+		 /*
+		 * 在重传过程中，如果超时重传超时上限TCP_RTO_MAX(120s)还没有接收
+		 * 到对方的确认，则认为有错误发生，调用tcp_write_err()报告错误并
+		 * 关闭套接字，然后返回；否则TCP进入拥塞控制的LOSS状态，并重新
+		 * 传送重传队列中的第一个段。
+		 */
 		if (tcp_jiffies32 - tp->rcv_tstamp > TCP_RTO_MAX) {
 			tcp_write_err(sk);
 			goto out;
 		}
 		tcp_enter_loss(sk);
 		tcp_retransmit_skb(sk, tcp_rtx_queue_head(sk), 1);
+		/*
+		 * 由于发生了重传，传输控制块中的路由缓存项需更新，
+		 * 因此将其清除，最后跳转到out_reset_timer标签处处理。
+		 */
 		__sk_dst_reset(sk);
 		goto out_reset_timer;
 	}
 
+	//走到下面说明是处于连接建立阶段或者对方的滑动窗口为0了
+
+
+    /*
+	 * 当发生重传之后,需要检测当前的资源使用
+	 * 情况和重传的次数.如果重传次数达到上限,
+	 * 则需要报告错误并强行关闭套接字.如果只
+	 * 是使用的资源达到使用的上限,则不进行此
+	 * 次重传.
+	 */
 	if (tcp_write_timeout(sk))
 		goto out;
 
+	/*
+	 * 如果重传次数为0,说明刚进入重传阶段,则
+	 * 根据不同的拥塞状态进行相关的数据统计.   第一次重传可能是对方滑动窗口满，需要进行拥塞控制
+	 */
 	if (icsk->icsk_retransmits == 0) {
 		int mib_idx;
 
@@ -483,8 +617,13 @@ void tcp_retransmit_timer(struct sock *sk)
 		__NET_INC_STATS(sock_net(sk), mib_idx);
 	}
 
+	// 调用tcp_enter_loss()进入常规的RTO慢启动重传恢复阶段
 	tcp_enter_loss(sk);
 
+	 /*
+	 * 如果发送重传队列上的第一个SKB失败,则复位
+	 * 重传定时器,等待下次重传.
+	 */
 	if (tcp_retransmit_skb(sk, tcp_rtx_queue_head(sk), 1) > 0) {
 		/* Retransmission failed because of local congestion,
 		 * do not backoff.
@@ -512,6 +651,10 @@ void tcp_retransmit_timer(struct sock *sk)
 	 * implemented ftp to mars will work nicely. We will have to fix
 	 * the 120 second clamps though!
 	 */
+	/*
+	 * 发送成功后,递增指数退避算法指数icsk_backoff
+	 * 和累计重传次数icsk_retransmits.
+	 */
 	icsk->icsk_backoff++;
 	icsk->icsk_retransmits++;
 
@@ -535,6 +678,10 @@ out_reset_timer:
 		/* Use normal (exponential) backoff */
 		icsk->icsk_rto = min(icsk->icsk_rto << 1, TCP_RTO_MAX);
 	}
+	/*
+	 * 完成重传后,需要设重传超时时间,然后复位重传
+	 * 定时器,等待下次重传.
+	 */
 	inet_csk_reset_xmit_timer(sk, ICSK_TIME_RETRANS, icsk->icsk_rto, TCP_RTO_MAX);
 	if (retransmits_timed_out(sk, net->ipv4.sysctl_tcp_retries1 + 1, 0))
 		__sk_dst_reset(sk);
@@ -582,6 +729,14 @@ out:
 	sk_mem_reclaim(sk);
 }
 
+ /*
+ * 重传定时器在TCP发送数据时设定，如果定时器
+ * 已超时而对端确认还未到达，则TCP将重传数据。
+ * 重传定时器的超时时间值是动态计算的，取决于
+ * TCP为该连接测量的往返时间以及该段已被重传
+ * 的次数。
+ */ 
+//tcp_write_timer包括数据报重传tcp_retransmit_timer和窗口探测定时器tcp_probe_timer
 static void tcp_write_timer(struct timer_list *t)
 {
 	struct inet_connection_sock *icsk =

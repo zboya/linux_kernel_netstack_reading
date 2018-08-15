@@ -2942,6 +2942,7 @@ void tcp_rearm_rto(struct sock *sk)
 		return;
 
 	if (!tp->packets_out) {
+		//为0说明所有的传输的段都已经acked。此时remove定时器。否则重启定时器。  
 		inet_csk_clear_xmit_timer(sk, ICSK_TIME_RETRANS);
 	} else {
 		u32 rto = inet_csk(sk)->icsk_rto;
@@ -3497,6 +3498,12 @@ static void tcp_xmit_recovery(struct sock *sk, int rexmit)
 }
 
 /* This routine deals with incoming acks, but not outgoing ones. */
+/*
+ * tcp_ack()用于处理接收到有ACK标志的段，当接到有效的ACK后会更新
+ * 发送窗口。
+ * @skb: 接收到的ACK段
+ * @flag: 标志，取值为FLAG_DATA等
+ */
 static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
@@ -3523,7 +3530,19 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 	/* If the ack is older than previous acks
 	 * then we can probably ignore it.
 	 */
-	if (before(ack, prior_snd_una)) {
+	/*
+	 * 检验确认的序号是否落在SND.UNA和SND.NXT之间，否则
+	 * 是不合法的序号。
+	 * 如果确认的序号在SND.NXT的右边，则说明该序号的数据
+	 * 发送方还没有发送，直接返回。
+	 * 如果确认的序号在SND.UNA的左边，则说明已经接受过
+	 * 该序号的ACK了。因为每个有负载的TCP段都会顺便
+	 * 携带一个ACK序号，即使这个序号已经确认过。因此
+	 * 如果是一个重复的ACK就无需作处理直接返回即可。但
+	 * 如果段中带有SACK选项，则需对此进行处理
+	 */
+	if (before(ack, prior_snd_una)) { 
+		//说明接收到了重复的ack
 		/* RFC 5961 5.2 [Blind Data Injection Attack].[Mitigation] */
 		if (before(ack, prior_snd_una - tp->max_window)) {
 			if (!(flag & FLAG_NO_CHALLENGE_ACK))
@@ -3536,15 +3555,20 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 	/* If the ack includes data we haven't sent yet, discard
 	 * this segment (RFC793 Section 3.9).
 	 */
+	// 如果ack比snd_nxt还大，说明这个ack相应data还没发送出去，为无效的ack
 	if (after(ack, tp->snd_nxt))
 		goto invalid_ack;
 
+	//说明收到的是已发送出去包的ack
 	if (after(ack, prior_snd_una)) {
 		flag |= FLAG_SND_UNA_ADVANCED;
 		icsk->icsk_retransmits = 0;
 	}
 
 	prior_fack = tcp_is_sack(tp) ? tcp_highest_sack_seq(tp) : tp->snd_una;
+	/*
+	 * 获取正在传输中的段数， 保存在rs中
+	 */
 	rs.prior_in_flight = tcp_packets_in_flight(tp);
 
 	/* ts_recent update must be made after we are sure that the packet
@@ -3558,6 +3582,11 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 		 * No more checks are required.
 		 * Note, we use the fact that SND.UNA>=SND.WL2.
 		 */
+		/*
+		 * 如果接收ACK执行的是快速路径,则更新发送窗口的左边界,
+		 * 添加FLAG_WIN_UPDATE标记,同时通知拥塞控制算法模块
+		 * 本次ACK是快速路径,如有必要,就作相应的处理
+		 */
 		tcp_update_wl(tp, ack_seq);
 		tcp_snd_una_update(tp, ack);
 		flag |= FLAG_WIN_UPDATE;
@@ -3567,7 +3596,10 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPHPACKS);
 	} else {
 		u32 ack_ev_flags = CA_ACK_SLOWPATH;
-
+		/*
+		* 如果接收ACK执行的是慢速路径,首先判断ACK段中是否有
+		* 数据负载,如果有,则添加FLAG_DATA标记.
+		*/
 		if (ack_seq != TCP_SKB_CB(skb)->end_seq)
 			flag |= FLAG_DATA;
 		else
@@ -3650,6 +3682,7 @@ old_ack:
 	/* If data was SACKed, tag it and see if we should send more data.
 	 * If data was DSACKed, see if we can undo a cwnd reduction.
 	 */
+	//不为0，说明有携带该选项字段
 	if (TCP_SKB_CB(skb)->sacked) {
 		flag |= tcp_sacktag_write_queue(sk, skb, prior_snd_una,
 						&sack_state);
@@ -3698,6 +3731,11 @@ static void smc_parse_options(const struct tcphdr *th,
  * But, this can also be called on packets in the established flow when
  * the fast version below fails.
  */
+/*
+ * tcp_parse_options()解析TCP选项，但通常只在分析SYN和SYN+ACK
+ * 段时被调用，此外慢速路径处理中，如果调用tcp_fast_parse_options()
+ * 失败，也可能在建立连接后调用之。
+ */
 void tcp_parse_options(const struct net *net,
 		       const struct sk_buff *skb,
 		       struct tcp_options_received *opt_rx, int estab,
@@ -3705,6 +3743,10 @@ void tcp_parse_options(const struct net *net,
 {
 	const unsigned char *ptr;
 	const struct tcphdr *th = tcp_hdr(skb);
+	/*
+	 * 如果TCP首部中包含TCP选项，即该首部
+	 * 长度大于不包含TCP选项的普通TCP首部。
+	 */
 	int length = (th->doff * 4) - sizeof(struct tcphdr);
 
 	ptr = (const unsigned char *)(th + 1);
@@ -3714,19 +3756,46 @@ void tcp_parse_options(const struct net *net,
 		int opcode = *ptr++;
 		int opsize;
 
+		/*
+         * 取选项的第二个字节，即kind，根据
+         * 其值分别作处理
+         */
 		switch (opcode) {
 		case TCPOPT_EOL:
+			/*
+			* TCPOPT_EOL表示选项表结束，因此
+			* 直接返回
+			*/
 			return;
 		case TCPOPT_NOP:	/* Ref: RFC 793 section 3.1 */
+			/*
+			* TCPOPT_NOP为空操作，只做填充用，
+			* 因此选项长度减1，进入下一个
+			* 循环处理下一个选项
+			*/
 			length--;
 			continue;
 		default:
+			/*
+			 * 如果不是选项表结束标志也不是
+			 * 空操作，则取选项长度，并检测
+			 * 其合法性
+			 */
 			opsize = *ptr++;
 			if (opsize < 2) /* "silly options" */
 				return;
 			if (opsize > length)
 				return;	/* don't parse partial options */
 			switch (opcode) {
+			/*
+			 * TCPOPT_MSS用来通告最大段长度，TCPOPT_MSS
+			 * 宏定义为4，又因为MSS选项只能出现在
+			 * SYN段中，因此判断TCP头部中SYN是否置位，
+			 * 此时调用参数estab应该为0.取最大段长度MSS，
+			 * user_mss是用户以TCP_MAXSEG选项调用setsockopt()
+			 * 设置的，将最大段长度上限值mss_clamp
+			 * 设置为选项中的MSS和user_mss两者中的较小值。
+			 */
 			case TCPOPT_MSS:
 				if (opsize == TCPOLEN_MSS && th->syn && !estab) {
 					u16 in_mss = get_unaligned_be16(ptr);
@@ -3738,9 +3807,24 @@ void tcp_parse_options(const struct net *net,
 					}
 				}
 				break;
+			/*
+			 * TCPOPT_WINDOW是窗口扩大因子选项，和最大
+			 * 段长度选项一样，也只能出现在SYN段中，
+			 * 因此作同样的判断。
+			 */
 			case TCPOPT_WINDOW:
 				if (opsize == TCPOLEN_WINDOW && th->syn &&
 				    !estab && net->ipv4.sysctl_tcp_window_scaling) {
+						/*
+					 * 取窗口扩大因子选项中的
+					 * 位移数，将表示SYN段中包含
+					 * 扩大因子选项的wscale_ok置为1，
+					 * 如果选项中的位移数大于14则
+					 * 警告，和网络相关的pintk都必须
+					 * 由net_ratelimit来监控。发送窗口
+					 * 扩大因子snd_wscale赋值为位移数和
+					 * 14两者中较小的值。
+					 */
 					__u8 snd_wscale = *(__u8 *)ptr;
 					opt_rx->wscale_ok = 1;
 					if (snd_wscale > TCP_MAX_WSCALE) {
@@ -3753,6 +3837,9 @@ void tcp_parse_options(const struct net *net,
 					opt_rx->snd_wscale = snd_wscale;
 				}
 				break;
+			/*
+			 * 时间戳选项
+			 */
 			case TCPOPT_TIMESTAMP:
 				if ((opsize == TCPOLEN_TIMESTAMP) &&
 				    ((estab && opt_rx->tstamp_ok) ||
@@ -3762,6 +3849,13 @@ void tcp_parse_options(const struct net *net,
 					opt_rx->rcv_tsecr = get_unaligned_be32(ptr + 4);
 				}
 				break;
+			/*
+			 * TCPOPT_SACK_PERM为允许SACK选项，只能出现在
+			 * SYN段中。将sack_ok置为1，表示SYN段中允许
+			 * SACK选项。tcp_sack_reset()将tcp_options_received结构
+			 * 中的三个与SACK有关的字段dsack、eff_sacks和
+			 * num_sacks清零。
+			 */
 			case TCPOPT_SACK_PERM:
 				if (opsize == TCPOLEN_SACK_PERM && th->syn &&
 				    !estab && net->ipv4.sysctl_tcp_sack) {
@@ -3769,7 +3863,14 @@ void tcp_parse_options(const struct net *net,
 					tcp_sack_reset(opt_rx);
 				}
 				break;
-
+			/*
+			 * TCPOLEN_SACK_BASE为2，TCPOLEN_SACK_PERBLOCK为8，因此
+			 * if语句的意思是选项长度包含kind、length字段以及
+			 * 一个至多个左右边界值对，且扣除kind和length字段
+			 * 长度后能被左右边界值对大小整除，sack_ok为1表示
+			 * 允许SACK。将tcp_skb_cb的sacked字段指向这些左右边界值
+			 * 对的开始处。
+			 */
 			case TCPOPT_SACK:
 				if ((opsize >= (TCPOLEN_SACK_BASE + TCPOLEN_SACK_PERBLOCK)) &&
 				   !((opsize - TCPOLEN_SACK_BASE) % TCPOLEN_SACK_PERBLOCK) &&
@@ -4007,6 +4108,15 @@ void tcp_reset(struct sock *sk)
  *
  *	If we are in FINWAIT-2, a received FIN moves us to TIME-WAIT.
  */
+/*
+ * 在TCP中还有些地方会通知套接字的faync_list队列
+ * 上的进程。比如，当TCP接收到FIN段后，如果
+ * 此时套接字未在DEAD状态，则唤醒等待该套接
+ * 字的进程。如果在发送接收方向都进行了关闭，
+ * 或者此时该传输控制块处于CLOSE状态，则通知
+ * 异步等待该套接字的进程，该连接已经终止，
+ * 否则通知进程连接可以进行写操作。
+ */
 void tcp_fin(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -4017,6 +4127,11 @@ void tcp_fin(struct sock *sk)
 	sock_set_flag(sk, SOCK_DONE);
 
 	switch (sk->sk_state) {
+	/*
+	 * 在SYN_RECV和ESTABLISHED状态，接收到FIN段后，
+	 * 将状态设置为CLOSE_WAIT，并确定延时发送
+	 * ACK
+	 */
 	case TCP_SYN_RECV:
 	case TCP_ESTABLISHED:
 		/* Move to CLOSE_WAIT */
@@ -4024,6 +4139,12 @@ void tcp_fin(struct sock *sk)
 		inet_csk(sk)->icsk_ack.pingpong = 1;
 		break;
 
+	/*
+     * 在CLOSE_WAIT状态接收到FIN段，则说明
+     * 收到的是重复的FIN段，忽略。
+     * 在CLOSING状态接收FIN段，也将其忽略，
+     * 因为在该状态只需等待ACK。
+     */
 	case TCP_CLOSE_WAIT:
 	case TCP_CLOSING:
 		/* Received a retransmission of the FIN, do
@@ -4034,6 +4155,11 @@ void tcp_fin(struct sock *sk)
 		/* RFC793: Remain in the LAST-ACK state. */
 		break;
 
+	/*
+	 * 根据TCP状态迁移图，在FIN_WAIT1状态接收
+	 * FIN段，则发送ACK，进入CLOSING状态，并
+	 * 等待对端的ACK
+	 */
 	case TCP_FIN_WAIT1:
 		/* This case occurs when a simultaneous close
 		 * happens, we must ack the received FIN and
@@ -4042,11 +4168,18 @@ void tcp_fin(struct sock *sk)
 		tcp_send_ack(sk);
 		tcp_set_state(sk, TCP_CLOSING);
 		break;
+	/*
+	 * 根据TCP状态迁移图，在FIN_WAIT2状态接收FIN段，
+	 * 则发送ACK，进入TIME_WAIT状态
+	 */
 	case TCP_FIN_WAIT2:
 		/* Received a FIN -- send ACK and enter TIME_WAIT. */
 		tcp_send_ack(sk);
 		tcp_time_wait(sk, TCP_TIME_WAIT, 0);
 		break;
+	/*
+	 * 在LISTEN和CLOSE状态忽略FIN段
+	 */
 	default:
 		/* Only TCP_LISTEN and TCP_CLOSE are left, in these
 		 * cases we should never reach this piece of code.
@@ -4059,6 +4192,15 @@ void tcp_fin(struct sock *sk)
 	/* It _is_ possible, that we have something out-of-order _after_ FIN.
 	 * Probably, we should reset in this case. For now drop them.
 	 */
+	/*
+	 * 如果此时套接字未处于DEAD状态，则唤醒
+	 * 等待该套接字的进程。如果在发送接收
+	 * 方向上都进行了关闭，或此时该传输控制
+	 * 块处于CLOSE状态，则唤醒异步等待该套接字
+	 * 的进程，通知它们该链接已终止，否则通知
+	 * 它们连接可以进行写操作
+	 */ 
+	//被动断开的一方在收到FIN的时候，内核要通知给应用程序
 	skb_rbtree_purge(&tp->out_of_order_queue);
 	if (tcp_is_sack(tp))
 		tcp_sack_reset(&tp->rx_opt);
@@ -5175,6 +5317,12 @@ static bool tcp_validate_incoming(struct sock *sk, struct sk_buff *skb,
 	bool rst_seq_match = false;
 
 	/* RFC1323: H1. Apply PAWS check first. */
+	/*
+	 * 调用tcp_fast_parse_options()解析TCP选项，并检查时间戳
+	 * 选项。如果首部中存在时间戳，但PAWS校验失败，
+	 * 并且不存在RST标志则还还需发送DACK给对端，说明
+	 * 接收到的TCP段已确认过，然后丢弃该数据包
+	 */
 	if (tcp_fast_parse_options(sock_net(sk), skb, th, tp) &&
 	    tp->rx_opt.saw_tstamp &&
 	    tcp_paws_discard(sk, skb)) {
@@ -5190,6 +5338,13 @@ static bool tcp_validate_incoming(struct sock *sk, struct sk_buff *skb,
 	}
 
 	/* Step 1: check sequence number */
+	/*
+	 * 调用tcp_sequence()检测接收到的段序号是否在
+	 * 接收窗口内，如果不是，则丢弃该数据包。
+	 * 如果不是复位段(TCP首部中有RST标志)则还
+	 * 需发送DACK给对端，说明接收到的TCP段不在
+	 * 接收窗口内。
+	 */
 	if (!tcp_sequence(tp, TCP_SKB_CB(skb)->seq, TCP_SKB_CB(skb)->end_seq)) {
 		/* RFC793, page 37: "In all states except SYN-SENT, all reset
 		 * (RST) segments are validated by checking their SEQ-fields."
@@ -5211,6 +5366,10 @@ static bool tcp_validate_incoming(struct sock *sk, struct sk_buff *skb,
 	}
 
 	/* Step 2: check RST bit */
+	/*
+	 * 如果接收的段是复位段，则处理完
+	 * 复位后丢弃该段。
+	 */
 	if (th->rst) {
 		/* RFC 5961 3.2 (extend to match against (RCV.NXT - 1) after a
 		 * FIN and SACK too if available):
@@ -5260,6 +5419,10 @@ static bool tcp_validate_incoming(struct sock *sk, struct sk_buff *skb,
 	/* step 4: Check for a SYN
 	 * RFC 5961 4.2 : Send a challenge ack
 	 */
+	/*
+	 * 已建立连接的TCP接收到SYN段，则说明对端
+	 * 发送了错误的信息，调用tcp_reset()作复位处理。
+	 */
 	if (th->syn) {
 syn_challenge:
 		if (syn_inerr)
@@ -5299,6 +5462,10 @@ discard:
  *	the rest is checked inline. Fast processing is turned on in
  *	tcp_data_queue when everything is OK.
  */
+/*
+* 如果传输控制块的状态为TCP_ESTABLISHED，则
+* 调用tcp_rcv_established()接收处理。
+*/
 void tcp_rcv_established(struct sock *sk, struct sk_buff *skb,
 			 const struct tcphdr *th)
 {
@@ -5493,6 +5660,10 @@ void tcp_finish_connect(struct sock *sk, struct sk_buff *skb)
 	tp->lsndtime = tcp_jiffies32;
 
 	if (sock_flag(sk, SOCK_KEEPOPEN))
+		/*
+		 * 如果启用了连接保活，则启用连接保活
+		 * 定时器。
+		 */
 		inet_csk_reset_keepalive_timer(sk, keepalive_time_when(tp));
 
 	if (!tp->rx_opt.snd_wscale)
@@ -5569,6 +5740,12 @@ static void smc_check_reset_syn(struct tcp_sock *tp)
 #endif
 }
 
+/*
+ * 在SYN_SENT状态下接收到的段,除紧急数据外其他的都由
+ * tcp_rcv_state_process()处理,以下代码显示的是SYN_SENT状态下接
+ * 收处理SYN+ACK段的情况.
+ */ 
+//客户端发送SYN后，收到SYN+ACK或者对端SYN(也就是两端同时发送SYN)的情况。
 static int tcp_rcv_synsent_state_process(struct sock *sk, struct sk_buff *skb,
 					 const struct tcphdr *th)
 {
@@ -5578,6 +5755,9 @@ static int tcp_rcv_synsent_state_process(struct sock *sk, struct sk_buff *skb,
 	int saved_clamp = tp->rx_opt.mss_clamp;
 	bool fastopen_fail;
 
+	/*
+	 * 解析段中的TCP选项,并保存到传输控制块中.
+	 */
 	tcp_parse_options(sock_net(sk), skb, &tp->rx_opt, 0, &foc);
 	if (tp->rx_opt.saw_tstamp && tp->rx_opt.rcv_tsecr)
 		tp->rx_opt.rcv_tsecr -= tp->tsoffset;
@@ -5611,6 +5791,11 @@ static int tcp_rcv_synsent_state_process(struct sock *sk, struct sk_buff *skb,
 		 *    delete TCB, and return."
 		 */
 
+		/*
+		 * 在SYN_SENT状态下接收到了ACK+RST段,需调用tcp_reset()
+		 * 设置ECONNREFUSED错误码,同时通知等待该套接字的
+		 * 进程,然后关闭该套接字.
+		 */
 		if (th->rst) {
 			tcp_reset(sk);
 			goto discard;
@@ -5623,6 +5808,11 @@ static int tcp_rcv_synsent_state_process(struct sock *sk, struct sk_buff *skb,
 		 *    See note below!
 		 *                                        --ANK(990513)
 		 */
+		/*
+		 * 在SYN_SENT状态下接收到的段必须存在SYN标志,否则
+		 * 说明接收到的段无效,需跳转到discard_and_undo处执行,
+		 * 清除解析得到的TCP选项,然后丢弃该段.
+		 */
 		if (!th->syn)
 			goto discard_and_undo;
 
@@ -5632,9 +5822,17 @@ static int tcp_rcv_synsent_state_process(struct sock *sk, struct sk_buff *skb,
 		 *    (our SYN has been ACKed), change the connection
 		 *    state to ESTABLISHED..."
 		 */
-
+		/*
+		 * 从TCP首部标志中获取支持显式拥塞通知的特性.
+		 * 对于支持ECN的TCP段来说,SYN的ACK只设置ECE标志.
+		 * 如果接收到的段与之不符,表示对端不支持显式
+		 * 拥塞通知.
+		 */
 		tcp_ecn_rcv_synack(tp, th);
 
+		/*
+		 * 初始化与窗口有关的成员变量.
+		 */
 		tcp_init_wl(tp, TCP_SKB_CB(skb)->seq);
 		tcp_ack(sk, skb, FLAG_SLOWPATH);
 
@@ -5654,16 +5852,25 @@ static int tcp_rcv_synsent_state_process(struct sock *sk, struct sk_buff *skb,
 			tp->window_clamp = min(tp->window_clamp, 65535U);
 		}
 
+		/*
+		 * 根据是否支持时间戳选项来设置传输控制块
+		 * 的相关字段.
+		 */
 		if (tp->rx_opt.saw_tstamp) {
 			tp->rx_opt.tstamp_ok	   = 1;
+			//如果在协商的时候TCP选项字段中支持时间戳选项，则以后的报文中都会带这个选项，所以tcp长度一直加了这个值
 			tp->tcp_header_len =
 				sizeof(struct tcphdr) + TCPOLEN_TSTAMP_ALIGNED;
+			//减这个是因为报文里面一直多了时间搓选项
 			tp->advmss	    -= TCPOLEN_TSTAMP_ALIGNED;
 			tcp_store_ts_recent(tp);
 		} else {
 			tp->tcp_header_len = sizeof(struct tcphdr);
 		}
 
+		/*
+		 * 初始化PMTU、MSS等成员变量。
+		 */
 		tcp_sync_mss(sk, icsk->icsk_pmtu_cookie);
 		tcp_initialize_rcv_mss(sk);
 
@@ -5681,12 +5888,21 @@ static int tcp_rcv_synsent_state_process(struct sock *sk, struct sk_buff *skb,
 		fastopen_fail = (tp->syn_fastopen || tp->syn_data) &&
 				tcp_rcv_fastopen_synack(sk, skb, &foc);
 
+		/*
+		 * 如果套接字不处于SOCK_DEAD状态，则唤醒等待该
+		 * 套接字的进程，同时向套接字的异步等待列表
+		 * 上的进程发送信号，通知它们该套接字可以输
+		 * 出数据了。
+		 */
 		if (!sock_flag(sk, SOCK_DEAD)) {
 			sk->sk_state_change(sk);
 			sk_wake_async(sk, SOCK_WAKE_IO, POLL_OUT);
 		}
 		if (fastopen_fail)
 			return -1;
+		/*
+		 * 连接建立完成，根据情况进入延时确认模式
+		 */
 		if (sk->sk_write_pending ||
 		    icsk->icsk_accept_queue.rskq_defer_accept ||
 		    icsk->icsk_ack.pingpong) {
@@ -5712,7 +5928,11 @@ discard:
 	}
 
 	/* No ACK in the segment */
-
+	/*
+	 * 在SYN_SENT状态下如果接收到RST段，则跳转到
+	 * discard_and_undo处，清除解析得到的TCP选项，并
+	 * 将传输控制块丢弃。
+	 */
 	if (th->rst) {
 		/* rfc793:
 		 * "If the RST bit is set
@@ -5724,17 +5944,41 @@ discard:
 	}
 
 	/* PAWS check. */
+	/*
+	 * 如果PAWS检测无效，则跳转到discard_and_undo处，
+	 * 清除解析得到的TCP选项，并将传输控制块
+	 * 丢弃。
+	 */
+	// 官方文档上说tcp_tw_reuse 加上tcp_timestamps（又叫PAWS, for Protection Against Wrapped Sequence Numbers）可以保证协议的角度上的安全，但是你需要tcp_timestamps在两边都被打开
 	if (tp->rx_opt.ts_recent_stamp && tp->rx_opt.saw_tstamp &&
 	    tcp_paws_reject(&tp->rx_opt, 0))
 		goto discard_and_undo;
 
-	if (th->syn) {
+	/*
+	 * 处理接收没有ACK标志的SYN段，处理同时打开的
+	 * 情况。
+	 * 
+	 * 同时打开情况如下:
+	 * 每一段必须发送一个SYN，且这两个SYN必须都传
+	 * 递到对端，这需要每一端都使用一个对端熟知
+	 * 的端口作为本地端口，这称为同时打开。
+	 * 当出现同时打开情况时，两端几乎在同时发送
+	 * SYN并进入SYN_SENT状态；当每一端接收到SYN后状
+	 * 态变为SYN_RECVD，发送SYN并对收到的SYN进行确认；
+	 * 当双方都收到对端的SYN及相应的ACK，状态变迁
+	 * 为ESTABLISHED。
+	 */
+	if (th->syn) { //同时打开，见樊东东 下P828
 		/* We see SYN without ACK. It is attempt of
 		 * simultaneous connect with crossed SYNs.
 		 * Particularly, it can be connect to self.
 		 */
 		tcp_set_state(sk, TCP_SYN_RECV);
 
+		/*
+		 * 根据是否支持时间戳选项，设置TCP
+		 * 传输控制块相应的字段。
+		 */
 		if (tp->rx_opt.saw_tstamp) {
 			tp->rx_opt.tstamp_ok = 1;
 			tcp_store_ts_recent(tp);
@@ -5744,6 +5988,9 @@ discard:
 			tp->tcp_header_len = sizeof(struct tcphdr);
 		}
 
+		/*
+		 * 初始化窗口相关的成员变量。
+		 */
 		tp->rcv_nxt = TCP_SKB_CB(skb)->seq + 1;
 		tp->copied_seq = tp->rcv_nxt;
 		tp->rcv_wup = TCP_SKB_CB(skb)->seq + 1;
@@ -5755,12 +6002,22 @@ discard:
 		tp->snd_wl1    = TCP_SKB_CB(skb)->seq;
 		tp->max_window = tp->snd_wnd;
 
+		/*
+		 * 从TCP首部标志中获取支持显式拥塞通知的特性。
+		 * 对于支持ECN的TCP端来说，SYN段TCP首部中有设置
+		 * ECE及CWR标志，接收到的段中有任何一个标志来
+		 * 设置，都表示对端不支持显式拥塞通知。
+		 */
 		tcp_ecn_rcv_syn(tp, th);
 
 		tcp_mtup_init(sk);
 		tcp_sync_mss(sk, icsk->icsk_pmtu_cookie);
 		tcp_initialize_rcv_mss(sk);
 
+		/*
+		 * 最后发送SYN+ACK段给对端，并丢弃接收到的
+		 * SYN段。
+		 */
 		tcp_send_synack(sk);
 #if 0
 		/* Note, we could accept data and URG from this segment.
@@ -5801,6 +6058,7 @@ reset_and_undo:
  *	address independent.
  */
 
+//这里说明在连接建立的过程中只能是客户端收到SYN+ACK,或者是服务器端收到SYN。连接断开的过程也会走到这里面
 int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -5815,6 +6073,12 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		goto discard;
 
 	case TCP_LISTEN:
+	 	/*
+		 * 在半连接的LISTEN状态下，只处理SYN段。如果是
+		 * ACK段，此时连接尚未开始建立，因此返回1。在调用
+		 * tcp_rcv_state_process()函数中会给对方发送RST段；
+		 * 如果接收的是RST段，则丢弃
+		 */
 		if (th->ack)
 			return 1;
 
@@ -5827,18 +6091,28 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 			/* It is possible that we process SYN packets from backlog,
 			 * so we need to make sure to disable BH right there.
 			 */
+			 /*
+			 * 处理SYN段，主要由conn_request接口(TCP中为tcp_v4_conn_request)处理，
+			 * icsk_af_ops成员在创建套接字时被初始化，参见tcp_v4_init_sock()
+			 */
 			local_bh_disable();
+			// 收到三次握手的第一步SYN，则在tcp_v4_conn_request中创建连接请求控制块
 			acceptable = icsk->icsk_af_ops->conn_request(sk, skb) >= 0;
 			local_bh_enable();
 
 			if (!acceptable)
 				return 1;
 			consume_skb(skb);
-			return 0;
+			return 0; //注意这里返回出去了
 		}
 		goto discard;
 
-	case TCP_SYN_SENT:
+	case TCP_SYN_SENT: //客户端收到SYN+ACK
+	 /*
+		 * 处理SYN_SENT状态下接收到的TCP段,如果返回值大于0
+		 * 则表示需给对方发送RST段,该TCP段的释放由
+		 * tcp_rcv_state_process()的调用者来处理.
+		 */
 		tp->rx_opt.saw_tstamp = 0;
 		tcp_mstamp_refresh(tp);
 		queued = tcp_rcv_synsent_state_process(sk, skb, th);
@@ -5846,10 +6120,15 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 			return queued;
 
 		/* Do step6 onward by hand. */
+		/*
+		 * 在处理了SYN_SENT状态下接收到的段之后,还
+		 * 需处理紧急数据,然后释放该段,最后检测是
+		 * 否有数据需要发送.
+		 */
 		tcp_urg(sk, skb, th);
 		__kfree_skb(skb);
 		tcp_data_snd_check(sk);
-		return 0;
+		return 0; //注意这里返回出去了
 	}
 
 	tcp_mstamp_refresh(tp);
@@ -5872,6 +6151,10 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		return 0;
 
 	/* step 5: check the ACK field */
+	/*
+	* 处理TCP段ACK标志，tcp_ack()返回非零值表示处理
+	* ACK段成功，是正常的第三次握手TCP段
+	*/
 	acceptable = tcp_ack(sk, skb, FLAG_SLOWPATH |
 				      FLAG_UPDATE_TS_RECENT |
 				      FLAG_NO_CHALLENGE_ACK) > 0;
@@ -5884,6 +6167,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 	}
 	switch (sk->sk_state) {
 	case TCP_SYN_RECV:
+	//这里是由tcp_v4_do_rcv里面的tcp_child_process走到这里，在tcp_child_process前会通过tcp_v4_hnd_req创建一个新的struct sock
 		if (!tp->srtt_us)
 			tcp_synack_rtt_meas(sk, req);
 
@@ -5907,6 +6191,9 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 			tp->copied_seq = tp->rcv_nxt;
 		}
 		smp_mb();
+		/*
+		* 设置"子"传输控制块为ESTABLISHED状态
+		*/
 		tcp_set_state(sk, TCP_ESTABLISHED);
 		sk->sk_state_change(sk);
 
@@ -5914,9 +6201,17 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		 * Passively open sockets are not waked up, because
 		 * sk->sk_sleep == NULL and sk->sk_socket == NULL.
 		 */
+		/*
+		* 发信号给那些将通过该套接字发送数据的进程，
+		* 通知他们套接字目前已经可以发送数据了
+		*/
 		if (sk->sk_socket)
 			sk_wake_async(sk, SOCK_WAKE_IO, POLL_OUT);
 
+		/*
+		* 初始化传输控制块各字段，如果存在时间戳选项，
+		* 同时平滑RTT为零，则需计算重传超时时间等
+		*/
 		tp->snd_una = TCP_SKB_CB(skb)->ack_seq;
 		tp->snd_wnd = ntohs(th->window) << tp->rx_opt.snd_wscale;
 		tcp_init_wl(tp, TCP_SKB_CB(skb)->seq);
@@ -5928,9 +6223,17 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 			tcp_update_pacing_rate(sk);
 
 		/* Prevent spurious tcp_cwnd_restart() on first data packet */
+		/*
+		* 更新最近一次发送数据包的时间
+		*/
 		tp->lsndtime = tcp_jiffies32;
-
+		/*
+		* 初始化与路径MTU有关的成员
+		*/
 		tcp_initialize_rcv_mss(sk);
+		/*
+		* 计算有关TCP首部预测的标志
+		*/
 		tcp_fast_path_on(tp);
 		break;
 
@@ -5949,18 +6252,40 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		}
 		if (tp->snd_una != tp->write_seq)
 			break;
-
+		/*
+		* 如果通过ACK的确认，所有的发送
+		* 段(包括FIN段)对方都已收到，则
+		* 从FIN_WAIT1状态迁移到FIN_WAINT2状态，
+		* 并关闭发送方向的连接。
+		*/
 		tcp_set_state(sk, TCP_FIN_WAIT2);
 		sk->sk_shutdown |= SEND_SHUTDOWN;
-
+		/*
+		* 因为从对端接收到ACK段，因此可以
+		* 确认此路由缓存有效
+		*/
 		sk_dst_confirm(sk);
 
 		if (!sock_flag(sk, SOCK_DEAD)) {
 			/* Wake up lingering close() */
+			/*
+			* 如果套接字不在SOCK_DEAD状态，由于
+			* TCP状态发生了变化，因此唤醒那些
+			* 等待本套接字的进程.
+			* 这里应该是唤醒tcp_close()中设置了SOCK_LINGER标志后
+			* 需要等待的进程。
+			*/
 			sk->sk_state_change(sk);
 			break;
 		}
-
+		/*
+		* 如果套接字处于SOCK_DEAD状态，则需
+		* 关闭传输控制块，或者在FIN_WAIT2
+		* 状态等待。
+		* 如果linger2小于0，则说明无需在
+		* FIN_WAIT2状态等待，直接关闭传输
+		* 控制块
+		*/		
 		if (tp->linger2 < 0) {
 			tcp_done(sk);
 			NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPABORTONDATA);
@@ -5976,8 +6301,15 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 			return 1;
 		}
 
+		/*
+		sock结构进入TIME_WAIT状态有两种情况：一种是在真正进入了TIME_WAIT状态，还有一种是真实的状态是FIN_WAIT_2的TIME_WAIT状态。
+		之所以让FIN_WAIT_2状态在没有接收到FIN包的情况下也可以进入TIME_WAIT状态是因为tcp_sock结构占用的资源要比tcp_timewait_sock
+		结构占用的资源多，而且在TIME_WAIT下也可以处理连接的关闭。
+		*/
 		tmo = tcp_fin_time(sk);
+		//这里说明了:主动关闭的一端在等待三次握手中的第三步FIN的时候，不会永远等待，如果对端等tmo还没发送FIN过来，则直接进入time_wait定时器tcp_time_wait(这里面会把之前的sk释放掉，用心的timewait_sock替换)超时阶段
 		if (tmo > TCP_TIMEWAIT_LEN) {
+			//超过TCP_TIMEWAIT_LEN的时间在keepalive中实现，然后在在该keepalive定时器回调中进入tcp_time_wait
 			inet_csk_reset_keepalive_timer(sk, tmo - TCP_TIMEWAIT_LEN);
 		} else if (th->fin || sock_owned_by_user(sk)) {
 			/* Bad case. We could lose such FIN otherwise.
@@ -5988,6 +6320,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 			 */
 			inet_csk_reset_keepalive_timer(sk, tmo);
 		} else {
+			//本端发送的fin已经收到确认，等待对方发送fin
 			tcp_time_wait(sk, TCP_FIN_WAIT2, tmo);
 			goto discard;
 		}
@@ -5995,6 +6328,11 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 	}
 
 	case TCP_CLOSING:
+		/*
+		* 如果通过ACK确认，所有的发送段(包括
+		* FIN段)对方都已经收到，则从CLOSING状态
+		* 迁移到TIME_WAIT状态，作2MSL超时等待
+		*/
 		if (tp->snd_una == tp->write_seq) {
 			tcp_time_wait(sk, TCP_TIME_WAIT, 0);
 			goto discard;
@@ -6002,6 +6340,12 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		break;
 
 	case TCP_LAST_ACK:
+		/*
+		* 如果通过ACK确认，所有的发送段(包括FIN段)
+		* 对方都已经收到，则从LAST_ACK状态迁移到
+		* CLOSE状态，把相关的metrics更新到目的路由项
+		* 中，并关闭传输控制块。
+		*/
 		if (tp->snd_una == tp->write_seq) {
 			tcp_update_metrics(sk);
 			tcp_done(sk);
@@ -6011,9 +6355,17 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 	}
 
 	/* step 6: check the URG bit */
+	/*
+	 * 处理带外数据
+	 */
 	tcp_urg(sk, skb, th);
 
 	/* step 7: process the segment text */
+	/*
+	 * 对于CLOSE_WAIT、CLOSING和LAST_ACK这三种状态，如果
+	 * 接收到已经确认过的段，则直接丢弃，否则与
+	 * FIN_WAIT1和FIN_WAIT2状态的处理方式一样。
+	 */
 	switch (sk->sk_state) {
 	case TCP_CLOSE_WAIT:
 	case TCP_CLOSING:
@@ -6021,6 +6373,11 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		if (!before(TCP_SKB_CB(skb)->seq, tp->rcv_nxt))
 			break;
 		/* fall through */
+	 /*
+	 * 如果接收方向已关闭，而又接收到新的数据，
+	 * 则需给对端发送RST段，说明接收方已丢弃了
+	 * 该数据。
+	 */
 	case TCP_FIN_WAIT1:
 	case TCP_FIN_WAIT2:
 		/* RFC 793 says to queue data in these states,
@@ -6043,6 +6400,11 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 	}
 
 	/* tcp_data could move socket to TIME-WAIT */
+	/*
+	 * 如果TCP不处在CLOSE状态，则发送队列
+	 * 中的段，同时调度ACK，确定是否立即
+	 * 发送ACK还是延时发送。
+	 */
 	if (sk->sk_state != TCP_CLOSE) {
 		tcp_data_snd_check(sk);
 		tcp_ack_snd_check(sk);

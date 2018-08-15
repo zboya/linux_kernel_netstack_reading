@@ -77,8 +77,12 @@
 #include <linux/capability.h>
 #include <linux/user_namespace.h>
 
+//见函数skb_init, 分配SKB的两种方式见__alloc_skb
+//SKB都是从该高速缓存中分配的，和下面的clone_cache的区别是，从该缓存中分配的长度为sizeof(struct sk_buff),下面的这个是2倍sizeof+sizeof(atomic_t) 
 struct kmem_cache *skbuff_head_cache __ro_after_init;
+//如果在分配SKB的时候就知道可能该SKB会被克隆，那么就从这个高速缓存分配空间，这样可以提高效率 
 static struct kmem_cache *skbuff_fclone_cache __ro_after_init;
+
 int sysctl_max_skb_frags __read_mostly = MAX_SKB_FRAGS;
 EXPORT_SYMBOL(sysctl_max_skb_frags);
 

@@ -312,6 +312,7 @@ extern int sysctl_max_skb_frags;
 
 typedef struct skb_frag_struct skb_frag_t;
 
+// 聚合分散io的支持，常说的‘零拷贝’技术
 struct skb_frag_struct {
 	struct {
 		struct page *p;
@@ -658,6 +659,19 @@ typedef unsigned char *sk_buff_data_t;
  *	@users: User count - see {datagram,tcp}.c
  */
 
+/*
+sk_buff是linux网络子系统中最重要的数据结构之一。一般简写为skb
+设计要求：
+	方便的处理可变长缓存
+	容易在头部和尾部添加或移除数据
+	在添加和移除数据的时候尽量避免内存的分配或拷贝
+
+sk_buff大概分为以下几类：
+	* 与skb组织有关的部分
+	* 通用成员变量
+	* 标志性变量
+	* 与特性相关的变量
+*/
 struct sk_buff {
 	union {
 		struct {

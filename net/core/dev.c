@@ -3505,6 +3505,25 @@ struct netdev_queue *netdev_pick_tx(struct net_device *dev,
  *      the BH enable code must have IRQs enabled so that it will not deadlock.
  *          --BLG
  */
+/*
+  * 网络接口口核心层向网络协议层提供的统一
+  * 的发送接口，无论IP，还是ARP协议，以及其它
+  * 各种底层协议，通过这个函数把要发送的数据
+  * 传递给网络接口核心层
+  * 
+  * update:
+  *   若支持流量控制，则将待输出的数据包根据规则
+  * 加入到输出网络队列中排队，并在合适的时机激活
+  * 网络设备输出软中断，依次将报文从队列中取出通过
+  * 网络设备输出。若不支持流量控制，则直接将数据包
+  * 从网络设备输出。
+  *   如果提交失败，则返回相应的错误码，然而返回
+  * 成功也并不能确保数据包被成功发送，因为有可能
+  * 由于拥塞而导致流量控制机制将数据包丢弃。
+  *   调用dev_queue_xmit()函数输出数据包，前提是必须启用
+  * 中断，只有启用中断之后才能激活下半部。
+  */
+ //到这里的skb可能有以下三种:支持GSO(FRAGLIST类型的聚合分散I/O数据包, 对于SG类型的聚合分散I/O数据包), 或者是非GSO的SKB，但这里的skb是在ip_finish_output中分片后的skb
 static int __dev_queue_xmit(struct sk_buff *skb, void *accel_priv)
 {
 	struct net_device *dev = skb->dev;
@@ -3612,6 +3631,8 @@ out:
 	return rc;
 }
 
+//通过ip_local_out走到这里,走到这里的SKB起IP层及其以上各层已经封装完毕。
+//  协议栈向设备发送数据包时都需调用该函数，该函数对SKB进行排队，最终由底层设备驱动程序进行传输
 int dev_queue_xmit(struct sk_buff *skb)
 {
 	return __dev_queue_xmit(skb, NULL);

@@ -439,8 +439,16 @@ static inline void dst_set_expires(struct dst_entry *dst, int timeout)
 }
 
 /* Output packet to network from transport.  */
+/*
+ * 封装了输出数据包目的路由缓存项中
+ * 的输出接口。
+ */
 static inline int dst_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
+	/*
+     * 如果是单播数据包，设置的是 ip_output(),
+     * 如果是组播数据包，设置的是 ip_mc_output().
+     */
 	return skb_dst(skb)->output(net, sk, skb);
 }
 
