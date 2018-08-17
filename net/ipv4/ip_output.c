@@ -302,6 +302,9 @@ static int ip_finish_output_gso(struct net *net, struct sock *sk,
 }
 
 // 由ip_output调用
+/* 如果数据包长度大于MTU，则调用ip_fragment()
+* 对IP数据包进行分片。
+*/
 static int ip_finish_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
 	unsigned int mtu;
@@ -321,9 +324,11 @@ static int ip_finish_output(struct net *net, struct sock *sk, struct sk_buff *sk
 	}
 #endif
 	mtu = ip_skb_dst_mtu(sk, skb);
+	// 支持gso的话用ip_finish_output_gso
 	if (skb_is_gso(skb))
 		return ip_finish_output_gso(net, sk, skb, mtu);
 
+	// 如果不支持TSO或者GSO，tcp发送的时候是按照mss来组织skb的，所以skb->len会等于mtu  所以TCP叫分段，和IP分片不一样，只有UDP才有IP分片
 	if (skb->len > mtu || (IPCB(skb)->flags & IPSKB_FRAG_PMTU))
 		return ip_fragment(net, sk, skb, mtu, ip_finish_output2);
 
