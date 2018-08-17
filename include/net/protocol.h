@@ -38,6 +38,7 @@
 #define MAX_INET_PROTOS		256
 
 /* This is used to register protocols. */
+// 网络层和传输层的之间的桥梁
 struct net_protocol {
 	int			(*early_demux)(struct sk_buff *skb);
 	int			(*early_demux_handler)(struct sk_buff *skb);
@@ -77,6 +78,8 @@ struct net_offload {
 #define INET6_PROTO_GSO_EXTHDR	0x1
 
 /* This is used to register socket interfaces for IP protocols.  */
+// 每次 创建套接字的时候会用到
+// 此接口只在套接口层起作用
 struct inet_protosw {
 	struct list_head list;
 
@@ -85,6 +88,7 @@ struct inet_protosw {
 	unsigned short	 protocol; /* This is the L4 protocol number.  */
 
 	struct proto	 *prot;
+	// 套接口传输层接口
 	const struct proto_ops *ops;
   
 	unsigned char	 flags;      /* See INET_PROTOSW_* below.  */

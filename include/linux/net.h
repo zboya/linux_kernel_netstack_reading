@@ -201,7 +201,7 @@ struct proto_ops {
 
 #define DECLARE_SOCKADDR(type, dst, src)	\
 	type dst = ({ __sockaddr_check_size(sizeof(*dst)); (type) src; })
-
+// 该结构屏蔽各个传输层的区别，提供一个协议族到套接口创建的接口
 struct net_proto_family {
 	int		family;
 	int		(*create)(struct net *net, struct socket *sock,

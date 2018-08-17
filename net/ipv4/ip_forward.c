@@ -75,6 +75,11 @@ static int ip_forward_finish(struct net *net, struct sock *sk, struct sk_buff *s
 	return dst_output(net, sk, skb);
 }
 
+//在函数ip_route_input_slow->ip_mkroute_input注册，
+/*
+ * IP数据包的转发是由ip_forward()处理，该函数在ip_rcv_finish()
+ * 通过输入路由缓存被调用。
+ */
 int ip_forward(struct sk_buff *skb)
 {
 	u32 mtu;

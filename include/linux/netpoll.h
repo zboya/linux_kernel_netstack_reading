@@ -22,6 +22,8 @@ union inet_addr {
 	struct in6_addr	in6;
 };
 
+// https://blog.csdn.net/dog250/article/details/45788497
+// 虽然和网络相关，但是它却不是网络协议栈的一部分，这就是netpoll
 struct netpoll {
 	struct net_device *dev;
 	char dev_name[IFNAMSIZ];

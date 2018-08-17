@@ -2243,9 +2243,12 @@ static inline struct sk_buff **call_gro_receive_sk(gro_receive_sk_t cb,
 	return cb(sk, head, skb);
 }
 
+// 网络层的输入接口，支持多种协议，在链路层和网络层中起到了桥梁的作用
+// 比如如果type为ETH_P_IP则func为ip_rcv()
 struct packet_type {
 	__be16			type;	/* This is really htons(ether_type). */
 	struct net_device	*dev;	/* NULL is wildcarded here	     */
+	// 协议入口接收处理函数
 	int			(*func) (struct sk_buff *,
 					 struct net_device *,
 					 struct packet_type *,
@@ -2809,7 +2812,10 @@ extern int netdev_flow_limit_table_len;
 /*
  * Incoming packets are placed on per-CPU queues
  */
+// 在每个cpu上都有这样的一个队列，所以不需要锁。
+// 这个结构主要用来存储接收到的数据帧
 struct softnet_data {
+	// 网络设备轮询队列
 	struct list_head	poll_list;
 	struct sk_buff_head	process_queue;
 
@@ -2823,6 +2829,7 @@ struct softnet_data {
 #ifdef CONFIG_NET_FLOW_LIMIT
 	struct sd_flow_limit __rcu *flow_limit;
 #endif
+	// 数据包输出软中断中输出的数据包网络队列
 	struct Qdisc		*output_queue;
 	struct Qdisc		**output_queue_tailp;
 	struct sk_buff		*completion_queue;
@@ -2842,6 +2849,7 @@ struct softnet_data {
 	unsigned int		input_queue_tail;
 #endif
 	unsigned int		dropped;
+	// 非NAPI的接口层缓存队列，队列长度由 netdev_max_backlog 控制
 	struct sk_buff_head	input_pkt_queue;
 	struct napi_struct	backlog;
 
@@ -4081,6 +4089,7 @@ int __init dev_proc_init(void);
 #define dev_proc_init() 0
 #endif
 
+// 最终调用e100_xmit_frame发送数据
 static inline netdev_tx_t __netdev_start_xmit(const struct net_device_ops *ops,
 					      struct sk_buff *skb, struct net_device *dev,
 					      bool more)
@@ -4089,6 +4098,7 @@ static inline netdev_tx_t __netdev_start_xmit(const struct net_device_ops *ops,
 	return ops->ndo_start_xmit(skb, dev);
 }
 
+// 由xmit_one调用，负责数据设备层的输出__netdev_start_xmit
 static inline netdev_tx_t netdev_start_xmit(struct sk_buff *skb, struct net_device *dev,
 					    struct netdev_queue *txq, bool more)
 {

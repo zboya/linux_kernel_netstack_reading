@@ -2215,6 +2215,10 @@ static int e100_rx_alloc_list(struct nic *nic)
 	return 0;
 }
 
+// e100中断处理函数，当由网络数据包到达设备时，网络设备出发中断，
+// 然后e100_intr函数处理
+// 也会调用__napi_schedule激活接收报文的软中断-NET_RX_SOFTIRQ
+// 而触发软中断就会引起软中断处理函数net_rx_action
 static irqreturn_t e100_intr(int irq, void *dev_id)
 {
 	struct net_device *netdev = dev_id;
@@ -2224,6 +2228,8 @@ static irqreturn_t e100_intr(int irq, void *dev_id)
 	netif_printk(nic, intr, KERN_DEBUG, nic->netdev,
 		     "stat_ack = 0x%02X\n", stat_ack);
 
+	// 检查该中断是不是由网络设备激活
+	// 检查网络设备是否有效
 	if (stat_ack == stat_ack_not_ours ||	/* Not our interrupt */
 	   stat_ack == stat_ack_not_present)	/* Hardware is ejected */
 		return IRQ_NONE;
@@ -2243,11 +2249,15 @@ static irqreturn_t e100_intr(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
+// 轮询处理
+// 将读取网络设备中接收到的报文，并由e100_rx_clean -> e100_rx_indicate -> netif_receive_skb 
+// 输入到上层协议中
 static int e100_poll(struct napi_struct *napi, int budget)
 {
 	struct nic *nic = container_of(napi, struct nic, napi);
 	unsigned int work_done = 0;
 
+	// e100_rx_clean将读取网络设备中接收到的报文，并由
 	e100_rx_clean(nic, &work_done, budget);
 	e100_tx_clean(nic);
 
@@ -2824,6 +2834,7 @@ static int e100_set_features(struct net_device *netdev,
 	return 0;
 }
 
+// 网络设备操作集
 static const struct net_device_ops e100_netdev_ops = {
 	.ndo_open		= e100_open,
 	.ndo_stop		= e100_close,
