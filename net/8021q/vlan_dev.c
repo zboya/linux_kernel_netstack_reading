@@ -102,9 +102,11 @@ static inline netdev_tx_t vlan_netpoll_send_skb(struct vlan_dev_priv *vlan, stru
 	return NETDEV_TX_OK;
 }
 
+// vlan 网卡发送数据的函数
 static netdev_tx_t vlan_dev_hard_start_xmit(struct sk_buff *skb,
 					    struct net_device *dev)
 {
+	// 获取vlan网卡的信息
 	struct vlan_dev_priv *vlan = vlan_dev_priv(dev);
 	struct vlan_ethhdr *veth = (struct vlan_ethhdr *)(skb->data);
 	unsigned int len;
@@ -115,6 +117,8 @@ static netdev_tx_t vlan_dev_hard_start_xmit(struct sk_buff *skb,
 	 * NOTE: THIS ASSUMES DIX ETHERNET, SPECIFICALLY NOT SUPPORTING
 	 * OTHER THINGS LIKE FDDI/TokenRing/802.3 SNAPs...
 	 */
+
+	// 如果数据包中没有vlan tag，则插入vlan tag
 	if (veth->h_vlan_proto != vlan->vlan_proto ||
 	    vlan->flags & VLAN_FLAG_REORDER_HDR) {
 		u16 vlan_tci;
@@ -123,11 +127,13 @@ static netdev_tx_t vlan_dev_hard_start_xmit(struct sk_buff *skb,
 		__vlan_hwaccel_put_tag(skb, vlan->vlan_proto, vlan_tci);
 	}
 
+	// 获取宿主网卡
 	skb->dev = vlan->real_dev;
 	len = skb->len;
 	if (unlikely(netpoll_tx_running(dev)))
 		return vlan_netpoll_send_skb(vlan, skb);
 
+	// 再次调用dev_queue_xmit，此时用真实网卡发送数据报文
 	ret = dev_queue_xmit(skb);
 
 	if (likely(ret == NET_XMIT_SUCCESS || ret == NET_XMIT_CN)) {
