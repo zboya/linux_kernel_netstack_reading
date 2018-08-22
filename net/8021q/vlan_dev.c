@@ -813,6 +813,8 @@ static void vlan_dev_free(struct net_device *dev)
 	vlan->vlan_pcpu_stats = NULL;
 }
 
+// register_vlan_device调用，启动一个vlan netdev，类似网卡的初始化
+// 由ioctl或者netlink触发
 void vlan_setup(struct net_device *dev)
 {
 	ether_setup(dev);

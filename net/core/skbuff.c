@@ -5060,11 +5060,13 @@ static struct sk_buff *skb_reorder_vlan_header(struct sk_buff *skb)
 	return skb;
 }
 
+// 去掉vlan tag
 struct sk_buff *skb_vlan_untag(struct sk_buff *skb)
 {
 	struct vlan_hdr *vhdr;
 	u16 vlan_tci;
 
+	// 如果没有vlan tag 直接返回skb
 	if (unlikely(skb_vlan_tag_present(skb))) {
 		/* vlan_tci is already set-up so leave this for another time */
 		return skb;
@@ -5077,13 +5079,16 @@ struct sk_buff *skb_vlan_untag(struct sk_buff *skb)
 	if (unlikely(!pskb_may_pull(skb, VLAN_HLEN)))
 		goto err_free;
 
+	// 获取vlan tag信息
 	vhdr = (struct vlan_hdr *)skb->data;
 	vlan_tci = ntohs(vhdr->h_vlan_TCI);
+	// 给skb->vlan_proto，skb->vlan_tci赋值
 	__vlan_hwaccel_put_tag(skb, skb->protocol, vlan_tci);
 
 	skb_pull_rcsum(skb, VLAN_HLEN);
 	vlan_set_encap_proto(skb, vhdr);
 
+	// 去掉vlan tag 
 	skb = skb_reorder_vlan_header(skb);
 	if (unlikely(!skb))
 		goto err_free;

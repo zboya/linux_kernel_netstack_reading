@@ -1799,6 +1799,7 @@ static int e100_xmit_prepare(struct nic *nic, struct cb *cb,
 	return 0;
 }
 
+// 让网卡发送skb数据报文
 static netdev_tx_t e100_xmit_frame(struct sk_buff *skb,
 				   struct net_device *netdev)
 {
@@ -2257,7 +2258,7 @@ static int e100_poll(struct napi_struct *napi, int budget)
 	struct nic *nic = container_of(napi, struct nic, napi);
 	unsigned int work_done = 0;
 
-	// e100_rx_clean将读取网络设备中接收到的报文，并由
+	// e100_rx_clean将读取网络设备中接收到的报文，并由netif_receive_skb提交给上层
 	e100_rx_clean(nic, &work_done, budget);
 	e100_tx_clean(nic);
 
@@ -2318,6 +2319,7 @@ static int e100_up(struct nic *nic)
 	e100_set_multicast_list(nic->netdev);
 	e100_start_receiver(nic, NULL);
 	mod_timer(&nic->watchdog, jiffies);
+	// 注册中断并且指定e100_intr为中断回调函数
 	if ((err = request_irq(nic->pdev->irq, e100_intr, IRQF_SHARED,
 		nic->netdev->name, nic->netdev)))
 		goto err_no_irq;
@@ -2803,6 +2805,9 @@ static void e100_free(struct nic *nic)
 	}
 }
 
+// 上层程序调用open函数时最终会执行网络设备注册的ndo_open函数。
+// 此函数的作用是为设备申请支持设备活动的各种资源， 
+// 包括：中断资源、DMA通道、网络设备物理地址等。
 static int e100_open(struct net_device *netdev)
 {
 	struct nic *nic = netdev_priv(netdev);
@@ -2836,9 +2841,9 @@ static int e100_set_features(struct net_device *netdev,
 
 // 网络设备操作集
 static const struct net_device_ops e100_netdev_ops = {
-	.ndo_open		= e100_open,
-	.ndo_stop		= e100_close,
-	.ndo_start_xmit		= e100_xmit_frame,
+	.ndo_open		= e100_open, // dev_open调用
+	.ndo_stop		= e100_close, 
+	.ndo_start_xmit		= e100_xmit_frame, // dev_hard_start_xmit调用
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_set_rx_mode	= e100_set_multicast_list,
 	.ndo_set_mac_address	= e100_set_mac_address,
@@ -2850,6 +2855,8 @@ static const struct net_device_ops e100_netdev_ops = {
 	.ndo_set_features	= e100_set_features,
 };
 
+// 模块初始化的时候，会调用xxx_probe来探测网卡设备，当网卡设备
+// 探测成功，则调用e100_alloc分配nic，在调用register_netdev注册该网卡设备
 static int e100_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 {
 	struct net_device *netdev;
@@ -3185,6 +3192,7 @@ static const struct pci_error_handlers e100_err_handler = {
 	.resume = e100_io_resume,
 };
 
+// pci 操作集
 static struct pci_driver e100_driver = {
 	.name =         DRV_NAME,
 	.id_table =     e100_id_table,
