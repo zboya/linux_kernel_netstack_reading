@@ -37,6 +37,13 @@
  *		as published by the Free Software Foundation; either version
  *		2 of the License, or (at your option) any later version.
  */
+
+/*
+https://en.wikipedia.org/wiki/Ethernet_frame#Ethernet_II
+ dmac	  smac 	  type	      数据	 		 FCS
+ 6bytes	  6bytes  2bytes	 46～1500bytes	 4bytes
+*/
+
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>

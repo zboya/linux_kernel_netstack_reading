@@ -487,6 +487,7 @@ static inline struct sk_buff *__vlan_hwaccel_push_inside(struct sk_buff *skb)
  *
  * Puts the VLAN TCI in @skb->vlan_tci and lets the device do the rest
  */
+// 给skb->vlan_proto，skb->vlan_tci赋值
 static inline void __vlan_hwaccel_put_tag(struct sk_buff *skb,
 					  __be16 vlan_proto, u16 vlan_tci)
 {

@@ -18,6 +18,8 @@
  *		2 of the License, or (at your option) any later version.
  */
 
+// https://en.wikipedia.org/wiki/IEEE_802.1Q
+
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/capability.h>
@@ -203,6 +205,7 @@ out_vid_del:
 /*  Attach a VLAN device to a mac address (ie Ethernet Card).
  *  Returns 0 if the device was created or a negative error code otherwise.
  */
+// 给real_dev网卡设备添加一个vlan id
 static int register_vlan_device(struct net_device *real_dev, u16 vlan_id)
 {
 	struct net_device *new_dev;
@@ -220,6 +223,7 @@ static int register_vlan_device(struct net_device *real_dev, u16 vlan_id)
 		return err;
 
 	/* Gotta set up the fields for the device. */
+	// 给vlan 设备取名字
 	switch (vn->name_type) {
 	case VLAN_NAME_TYPE_RAW_PLUS_VID:
 		/* name will look like:	 eth1.0005 */
@@ -245,6 +249,7 @@ static int register_vlan_device(struct net_device *real_dev, u16 vlan_id)
 		snprintf(name, IFNAMSIZ, "vlan%.4i", vlan_id);
 	}
 
+	// 分配一个netdev，并用vlan_setup初始化该设备
 	new_dev = alloc_netdev(sizeof(struct vlan_dev_priv), name,
 			       NET_NAME_UNKNOWN, vlan_setup);
 
@@ -265,6 +270,7 @@ static int register_vlan_device(struct net_device *real_dev, u16 vlan_id)
 	vlan->flags = VLAN_FLAG_REORDER_HDR;
 
 	new_dev->rtnl_link_ops = &vlan_link_ops;
+	// 注册vlan设备
 	err = register_vlan_dev(new_dev, NULL);
 	if (err < 0)
 		goto out_free_newdev;

@@ -1677,7 +1677,17 @@ enum netdev_priv_flags {
  */
 
 // net_device是网络驱动及接口层最重要的一个结构
-// 描述了接口，硬件等信息
+// https://www.ibm.com/developerworks/cn/linux/l-cn-networkdriver/index.html
+// 全局信息
+// 该类中包含了设备名（name 字段）、设备状态（state 字段）、设备初始化函数（init 字段）等。
+// 硬件信息
+// 该类中包含了设备内存使用情况（mem_end 和 mem_start 字段）、中断号（irq 字段）、IO 基地址（base_addr 字段）等。
+// 接口信息
+// 该类中包含了 MAC 地址（dev_addr 字段）、设备属性（flag 字段）、最大传输单元（mtu 字段）等。
+// 设备接口函数
+// 该类中包含了当前设备所提供的所有接口函数，比如设备打开函数（open 字段），该函数负责打开设备接口，当用户使用 ifconfig 
+// 命令配置网络时，该函数默认被调用；设备停止函数（stop 字段），该函数负责关闭设备接口；数据发送函数（hard_start_xmit 字段），
+// 当用户调用 socket 开始写数据时，该函数被调用，并负责往网络设备中发送数据。
 struct net_device {
 	char			name[IFNAMSIZ];
 	struct hlist_node	name_hlist;
@@ -1811,7 +1821,7 @@ struct net_device {
 #if IS_ENABLED(CONFIG_IRDA) || IS_ENABLED(CONFIG_ATALK)
 	void 			*atalk_ptr;
 #endif
-	struct in_device __rcu	*ip_ptr;
+	struct in_device __rcu	*ip_ptr; // ipv4相关的配置
 #if IS_ENABLED(CONFIG_DECNET)
 	struct dn_dev __rcu     *dn_ptr;
 #endif

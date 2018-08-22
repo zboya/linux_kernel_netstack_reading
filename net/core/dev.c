@@ -157,7 +157,40 @@
 
 static DEFINE_SPINLOCK(ptype_lock);
 static DEFINE_SPINLOCK(offload_lock);
+
+/*
+搜一下内核源代码，二层协议还真是多。。。
+drivers/net/wan/hdlc.c: dev_add_pack(&hdlc_packet_type);  //ETH_P_HDLC    hdlc_rcv
+drivers/net/wan/lapbether.c:
+            dev_add_pack(&lapbeth_packet_type);         //ETH_P_DEC       lapbeth_rcv
+drivers/net/wan/syncppp.c:
+            dev_add_pack(&sppp_packet_type);            //ETH_P_WAN_PPP   sppp_rcv
+drivers/net/bonding/bond_alb.c:  dev_add_pack(pk_type); //ETH_P_ARP       rlb_arp_recv
+drivers/net/bonding/bond_main.c:dev_add_pack(pk_type);  //PKT_TYPE_LACPDU bond_3ad_lacpdu_recv
+drivers/net/bonding/bond_main.c:dev_add_pack(pt);       //ETH_P_ARP       bond_arp_rcv
+drivers/net/pppoe.c: dev_add_pack(&pppoes_ptype);       //ETH_P_PPP_SES   pppoe_rcv
+drivers/net/pppoe.c: dev_add_pack(&pppoed_ptype);       //ETH_P_PPP_DISC  pppoe_disc_rcv
+drivers/net/hamradio/bpqether.c:
+                    dev_add_pack(&bpq_packet_type);     //ETH_P_BPQ       bpq_rcv
+net/ipv4/af_inet.c:  dev_add_pack(&ip_packet_type);     //ETH_P_IP       ip_rcv
+net/ipv4/arp.c:    dev_add_pack(&arp_packet_type);      //ETH_P_ARP       arp_rcv
+net/ipv4/ipconfig.c:  dev_add_pack(&rarp_packet_type);  //ETH_P_RARP      ic_rarp_recv
+net/ipv4/ipconfig.c:  dev_add_pack(&bootp_packet_type); //ETH_P_IP        ic_bootp_recv
+net/llc/llc_core.c: dev_add_pack(&llc_packet_type);     //ETH_P_802_2     llc_rcv
+net/llc/llc_core.c: dev_add_pack(&llc_tr_packet_type);  //ETH_P_TR_802_2  llc_rcv
+net/x25/af_x25.c:  dev_add_pack(&x25_packet_type);    //ETH_P_X25      x25_lapb_receive_frame
+
+这些不同协议的packet_type，有些是linux系统启动时挂上去的
+比如处理ip协议的pakcet_type，就是在 inet_init()时挂上去的
+还有些驱动模块加载的时候才加上去的
+*/
+
+
+// 全局类型处理列表，赋值的地方由dev_add_pack完成
+// 这些处理函数用来处理接收到的不同协议族的报文  
 struct list_head ptype_base[PTYPE_HASH_SIZE] __read_mostly;
+// 全局接收所有类型的处理函数
+// ptype_all链是为注册到内核的一些 sniffer，将上传给这些sniffer
 struct list_head ptype_all __read_mostly;	/* Taps */
 static struct list_head offload_base __read_mostly;
 
@@ -383,6 +416,8 @@ static inline void netdev_set_addr_lockdep_class(struct net_device *dev)
  *							--ANK (980803)
  */
 
+// 如果是接收所有协议 ETH_P_ALL，那么返回ptype_all
+// 如果不是，则返回ptype_base
 static inline struct list_head *ptype_head(const struct packet_type *pt)
 {
 	if (pt->type == htons(ETH_P_ALL))
@@ -405,6 +440,17 @@ static inline struct list_head *ptype_head(const struct packet_type *pt)
  *	will see the new packet type (until the next received packet).
  */
 
+// 将pt类型添加到列表中，比如ip协议会调用dev_add_pack(&ip_packet_type);
+/*
+static struct packet_type ip_packet_type __read_mostly = {
+	.type = cpu_to_be16(ETH_P_IP),
+	.func = ip_rcv,
+};
+*/
+// ETH_P_ALL的注册在packet_create中，
+// 该函数是通过应用层的函数nSock == socket(PF_PACKET, SOCK_RAW, htons(ETH_P_ALL))系统调用的。
+// ptype_all链是为注册到内核的一些 sniffer，将上传给这些sniffer，
+// 另一个就是遍历 ptype_base，这个就是具体的协议类型
 void dev_add_pack(struct packet_type *pt)
 {
 	struct list_head *head = ptype_head(pt);
@@ -1362,6 +1408,7 @@ void netdev_notify_peers(struct net_device *dev)
 }
 EXPORT_SYMBOL(netdev_notify_peers);
 
+// 打开网络设备，最终会调用ops->ndo_open打开网络设备
 static int __dev_open(struct net_device *dev)
 {
 	const struct net_device_ops *ops = dev->netdev_ops;
@@ -1417,6 +1464,20 @@ static int __dev_open(struct net_device *dev)
  *	Calling this function on an active interface is a nop. On a failure
  *	a negative errno code is returned.
  */
+/*
+  * 设备一旦注册后即可使用，但必须在用户
+  * 或用户空间应用程序使能后才可以收发数据
+  * 因为注册到系统中的网络设备，其初始
+  * 状态是关闭的，此时是不能传输数据的，必须
+  * 激活后，网络设备才能进行数据的传输。在
+  * 应用层，可以通过ifconfig up命令(最终是通过ioctl
+  * 的SIOCSIFFLAGS)来激活网络设备。而SIOCIFFLAGS命令
+  * 是通过dev_change_flags()调用dev_open()来激活网络设备。
+  * dev_open()将网络设备从关闭状态转到激活状态，
+  * 并发送一个NETDEV_UP消息到网络设备状态改变
+  * 通知链上。
+  */
+ // ic_dev_ioctl->dev_ioctl->dev_ifsioc->dev_change_flags
 int dev_open(struct net_device *dev)
 {
 	int ret;
@@ -1435,6 +1496,19 @@ int dev_open(struct net_device *dev)
 }
 EXPORT_SYMBOL(dev_open);
 
+
+/*
+  * 网络设备一旦关闭后就不能传输数据了。网络
+  * 设备能被用户命令明确地活被其他事件隐含地
+  * 禁止。在应用层，可以通过ifconfig down命令(最终
+  * 是通过ioctl()的SIOCSIFFLAGS)来关闭网络设备，或者
+  * 在网络设备注销时被禁止。
+  * SIOCSIFFLAGS命令通过dev_change_flags()，根据网络设备
+  * 当前的状态来确定调用dev_close()关闭网络设备。
+  * dev_close()将网络设备从激活状态转换到关闭状态，
+  * 并发送NETDEV_GOING_DOWN和NETDEV_DOWN消息到网络
+  * 设备状态改变通知链上。
+  *///卸载模块的时候也会调用该函数
 static void __dev_close_many(struct list_head *head)
 {
 	struct net_device *dev;
@@ -1618,6 +1692,21 @@ static int dev_boot_phase = 1;
  * view of the network device list.
  */
 
+//内核组件对由register_netdevice_notifier 和 unregister_netdevice_notifier分别注册、注销的通知链中的事件感兴趣。
+//yang 将处理网络设备事件的函数注册到netdev_chain通知链中  事件通知链(notifier chain)
+//注册时间通知连实际上就是把nb添加到netdev_chain链表中，然后让所有的dev设备执行nb->notifier_call()中的事件函数。可以参考pppoe_init
+
+/*
+Linux内核中各个子系统相互依赖，当其中某个子系统状态发生改变时，就必须使用一定的机制告知使用其服务的其他子系统，以便其他子系统采取相应的措施。
+为满足这样的需求，内核实现了事件通知链机制（notificationchain）。
+*/
+/*
+Linux的网络子系统一共有3个通知链：表示ipv4地址发生变化时的inetaddr_chain；表示ipv6地址发生变化的inet6addr_chain；还有表示设备注册、
+状态变化的netdev_chain。
+
+通知链技术可以概括为：事件的被通知者将事件发生时应该执行的操作通过函数指针方式保存在链表（通知链）中，
+然后当事件发生时通知者依次执行链表中每一个元素的回调函数完成通知
+*/
 int register_netdevice_notifier(struct notifier_block *nb)
 {
 	struct net_device *dev;
@@ -1727,6 +1816,8 @@ EXPORT_SYMBOL(unregister_netdevice_notifier);
  *	are as for raw_notifier_call_chain().
  */
 
+// 通知链技术可以概括为：事件的被通知者将事件发生时应该执行的操作通过函数指针方式保存在链表（通知链）中，
+// 然后当事件发生时通知者依次执行链表中每一个元素的回调函数完成通知
 static int call_netdevice_notifiers_info(unsigned long val,
 					 struct netdev_notifier_info *info)
 {
@@ -1959,7 +2050,18 @@ static inline bool skb_loop_sk(struct packet_type *ptype, struct sk_buff *skb)
  *	Support routine. Sends outgoing frames to any network
  *	taps currently in use.
  */
-
+/*
+  * 对于通过socket(AF_PACKET， SOCK_RAW，htons(ETH_P_ALL))创建
+  * 的原始套接字，不但可以接收从外部输入的数据包，
+  * 而且对于由本地输出的数据包，如果满足条件，也同样
+  * 可以接收。
+  * dev_queue_xmit_nit()就是用来接收由本地输出的数据包，在链路层
+  * 的输出过程中，会调用此函数，将满足条件的数据包输入
+  * 到RAW套接字。
+  * @skb:待输出的数据包，如果满足条件，则输入到原始套接字
+  * @dev:输出数据包的网络设备，如果满足条件，则从该网络
+  *          设备输入到原始套接字
+  */
 void dev_queue_xmit_nit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct packet_type *ptype;
@@ -3248,6 +3350,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 			__qdisc_drop(skb, &to_free);
 			rc = NET_XMIT_DROP;
 		} else {
+			//把SKB入队
 			rc = q->enqueue(skb, q, &to_free) & NET_XMIT_MASK;
 			__qdisc_run(q);
 		}
@@ -3269,10 +3372,12 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 
 	spin_lock(root_lock);
 	if (unlikely(test_bit(__QDISC_STATE_DEACTIVATED, &q->state))) {
+		//如果这个队列是未运行的，那么释放这个数据包
 		__qdisc_drop(skb, &to_free);
 		rc = NET_XMIT_DROP;
 	} else if ((q->flags & TCQ_F_CAN_BYPASS) && !qdisc_qlen(q) &&
 		   qdisc_run_begin(q)) {
+			//如果一个队列是未运行的，说明这个队列里面没有数据包，此时可以直接发送这个包
 		/*
 		 * This is a work-conserving queue; there are no old skbs
 		 * waiting to be sent out; and the qdisc is not running -
@@ -3292,6 +3397,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 		qdisc_run_end(q);
 		rc = NET_XMIT_SUCCESS;
 	} else {
+		//如果已经有CPU在运行这个队列，则直接把SKB入队
 		rc = q->enqueue(skb, q, &to_free) & NET_XMIT_MASK;
 		if (qdisc_run_begin(q)) {
 			if (unlikely(contended)) {
@@ -4525,6 +4631,7 @@ static inline int nf_ingress(struct sk_buff *skb, struct packet_type **pt_prev,
 	return 0;
 }
 
+// 由__netif_receive_skb调用，处理二层数据包
 static int __netif_receive_skb_core(struct sk_buff *skb, bool pfmemalloc)
 {
 	struct packet_type *ptype, *pt_prev;
@@ -4552,9 +4659,10 @@ another_round:
 
 	__this_cpu_inc(softnet_data.processed);
 
-	// 处理vlan
+	// 如果协议是vlan，那么去掉vlan tag
 	if (skb->protocol == cpu_to_be16(ETH_P_8021Q) ||
 	    skb->protocol == cpu_to_be16(ETH_P_8021AD)) {
+		// 去掉vlan tag
 		skb = skb_vlan_untag(skb);
 		if (unlikely(!skb))
 			goto out;
@@ -4566,13 +4674,14 @@ another_round:
 	if (pfmemalloc)
 		goto skip_taps;
 
-	//在net_dev_init中初始化
+	// 处理接收所有类型的handler
 	list_for_each_entry_rcu(ptype, &ptype_all, list) {
 		if (pt_prev)
 			ret = deliver_skb(skb, pt_prev, orig_dev); //此函数最终调用paket_type.func()   packet_rcv_spkt或者packet_rcv
 		pt_prev = ptype;
 	}
 
+	// 处理接收所有类型的handler
 	list_for_each_entry_rcu(ptype, &skb->dev->ptype_all, list) {
 		if (pt_prev)
 			ret = deliver_skb(skb, pt_prev, orig_dev);
@@ -4594,18 +4703,20 @@ skip_taps:
 skip_classify:
 	if (pfmemalloc && !skb_pfmemalloc_protocol(skb))
 		goto drop;
-
+	// 如果是vlan协议报文
 	if (skb_vlan_tag_present(skb)) {
 		if (pt_prev) {
 			ret = deliver_skb(skb, pt_prev, orig_dev);
 			pt_prev = NULL;
 		}
+		// 处理vlan报文
 		if (vlan_do_receive(&skb))
 			goto another_round;
 		else if (unlikely(!skb))
 			goto out;
 	}
 
+	// rx_handler由netdev_rx_handler_register注册
 	rx_handler = rcu_dereference(skb->dev->rx_handler);
 	if (rx_handler) {
 		if (pt_prev) {
@@ -4641,6 +4752,7 @@ skip_classify:
 
 	/* deliver only exact match when indicated */
 	if (likely(!deliver_exact)) {
+		// 从ptype_base得到相应的处理函数，进行处理
 		deliver_ptype_list_skb(skb, &pt_prev, orig_dev, type,
 				       &ptype_base[ntohs(type) &
 						   PTYPE_HASH_MASK]);
@@ -4703,6 +4815,7 @@ int netif_receive_skb_core(struct sk_buff *skb)
 }
 EXPORT_SYMBOL(netif_receive_skb_core);
 
+// 由netif_receive_skb_internal调用，处理二层数据包
 static int __netif_receive_skb(struct sk_buff *skb)
 {
 	int ret;
@@ -4762,6 +4875,9 @@ static int generic_xdp_install(struct net_device *dev, struct netdev_bpf *xdp)
 	return ret;
 }
 
+// 调用__netif_receive_skb函数
+// 根据二层的类型，全局数组ptype_all和ptype_base里的网络层数据报类型，
+// 把数据报递交给不同的网络层协议的接收函数(INET域中主要是ip_rcv和arp_rcv)
 static int netif_receive_skb_internal(struct sk_buff *skb)
 {
 	int ret;
@@ -4822,8 +4938,8 @@ static int netif_receive_skb_internal(struct sk_buff *skb)
 // 它根据注册在全局数组ptype_all和ptype_base里的网络层数据报类型，
 // 把数据报递交给不同的网络层协议的接收函数(INET域中主要是ip_rcv和arp_rcv)。
 /*
-在netif_receive_skb()函数中，可以看出处理的是像ARP、IP这些链路层以上的协议，那么，链路层报头是在哪里去掉的呢？答案是网卡驱动中，
-在调用netif_receive_skb()前，
+在netif_receive_skb()函数中，可以看出处理的是像ARP、IP这些链路层以上的协议，
+那么，链路层报头是在哪里去掉的呢？答案是网卡驱动中，在调用netif_receive_skb()前，
 原文链接：http://www.linuxidc.com/Linux/2011-05/36065.htm
 */
 int netif_receive_skb(struct sk_buff *skb)
@@ -5791,6 +5907,7 @@ void netif_napi_del(struct napi_struct *napi)
 }
 EXPORT_SYMBOL(netif_napi_del);
 
+// 调用真实网络设备的poll函数，比如e100.c的e100_poll函数，获取数据包
 static int napi_poll(struct napi_struct *n, struct list_head *repoll)
 {
 	void *have;
@@ -5815,7 +5932,6 @@ static int napi_poll(struct napi_struct *n, struct list_head *repoll)
 		NAPI的napi_struct是自己构造的，该结构上的poll钩子函数也是自己定义的。比如e100.c的e100_poll
 		非NAPI的napi_struct结构是默认的，也就是per cpu的softnet_data>backlog，起poll钩子函数为process_backlog
 		*/
-
 		work = n->poll(n, weight);
 		trace_napi_poll(n, work, weight);
 	}
@@ -5930,6 +6046,8 @@ static __latent_entropy void net_rx_action(struct softirq_action *h)
         即使现在硬中断抢占软中断，会把一个napi挂到pool_list的尾端            
         软中断只会从pool_list 头部移除一个pool_list，这样不存在临界区*/
 		n = list_first_entry(&list, struct napi_struct, poll_list);
+
+		// 调用真实网络设备的poll函数，比如e100.c的e100_poll函数，获取数据包
 		budget -= napi_poll(n, &repoll);
 
 		/* If softirq window is exhausted then punt.
@@ -7999,6 +8117,17 @@ EXPORT_SYMBOL(netif_tx_stop_all_queues);
  *	will not get the same name.
  */
 
+ /*
+ * 当待注册的网络设备名确定之后，便调用register_netdevice()注册网络设备，并将
+ * 网络设备描述符注册到系统中。完成注册后，会发送NETDEV_REGISTER消息到netdev_chain
+ * 通知链中，使得所有对设备注册感兴趣的模块都能接收消息。
+ */
+//网络设备注册的时机:加载网络设备的驱动程序 、  擦入可热插拔的网络设备
+//由驱动程序控制的网络设备都将会被注册  
+//alloc_netdev分配好空间后，调用alloc_netdev完成注册
+/*
+  * 在调用该函数前必须调用rtnl_lock()来获取rtnl互斥锁
+*/
 int register_netdevice(struct net_device *dev)
 {
 	int ret;
