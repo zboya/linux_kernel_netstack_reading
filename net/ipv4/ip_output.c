@@ -94,6 +94,7 @@ void ip_send_check(struct iphdr *iph)
 }
 EXPORT_SYMBOL(ip_send_check);
 
+//当IP头部封装好后，调用__ip_local_out
 int __ip_local_out(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
 	struct iphdr *iph = ip_hdr(skb);
@@ -447,6 +448,17 @@ static void ip_copy_addrs(struct iphdr *iph, const struct flowi4 *fl4)
 }
 
 /* Note: skb->sk can be different from sk, in case of tunnels */
+/*
+ * 在TCP中，将TCP段打包成IP数据包的方法根据TCP段类型
+ * 的不同而有多种接口。其中最常用的就是ip_queue_xmit()，
+ * 而ip_build_and_send_pkt()和ip_send_reply()只有在发送特定段时
+ * 才会被调用。
+ * @skb: 待封装成IP数据包的TCP段。
+ * @ipfragok: 标识待输出的数据是否已经完成分片。由于
+ * 在调用函数时ipfragok参数总为0，因此输出的IP数据包
+ * 是否分片取决于是否启用PMTU发现。
+ */ 
+// TCP发送的时候从tcp_transmit_skb函数里面跳转过来
 int ip_queue_xmit(struct sock *sk, struct sk_buff *skb, struct flowi *fl)
 {
 	struct inet_sock *inet = inet_sk(sk);
@@ -877,6 +889,7 @@ csum_page(struct page *page, int offset, int copy)
 	return csum;
 }
 
+// 进行ip分片，插入写入队列
 static int __ip_append_data(struct sock *sk,
 			    struct flowi4 *fl4,
 			    struct sk_buff_head *queue,
@@ -911,12 +924,24 @@ static int __ip_append_data(struct sock *sk,
 	    sk->sk_tsflags & SOF_TIMESTAMPING_OPT_ID)
 		tskey = sk->sk_tskey++;
 
+ 	/*
+     * 获取链路层首部及IP首部(包括选项)的长度
+     */
 	hh_len = LL_RESERVED_SPACE(rt->dst.dev);
 
 	fragheaderlen = sizeof(struct iphdr) + (opt ? opt->optlen : 0);
+	/*
+     * IP数据包的数据需4字节对齐，为加速计算直接将IP数据包的数据根据当前
+     * MTU 8字节对齐，然后重新得到用于分片的长度。
+     */
 	maxfraglen = ((mtu - fragheaderlen) & ~7) + fragheaderlen;
+	// TODO：
 	maxnonfragsize = ip_sk_ignore_df(sk) ? 0xFFFF : mtu;
 
+	/*
+     * 如果输出的数据长度超出一个IP数据包能容纳的长度，则向输出该数据包的
+     * 套接字发送EMSGSIZE出错信息。
+     */
 	if (cork->length + length > maxnonfragsize - fragheaderlen) {
 		ip_local_error(sk, EMSGSIZE, fl4->daddr, inet->inet_dport,
 			       mtu - (opt ? opt->optlen : 0));
@@ -927,12 +952,17 @@ static int __ip_append_data(struct sock *sk,
 	 * transhdrlen > 0 means that this is the first fragment and we wish
 	 * it won't be fragmented in the future.
 	 */
+	 /*
+     * 如果IP数据包没有分片，且输出网络设备支持硬件执行校验和，则设置
+     * CHECKSUM_PARTIAL，表示由硬件来执行校验和。
+     */
 	if (transhdrlen &&
 	    length + fragheaderlen <= mtu &&
 	    rt->dst.dev->features & (NETIF_F_HW_CSUM | NETIF_F_IP_CSUM) &&
 	    !(flags & MSG_MORE) &&
 	    !exthdrlen)
 		csummode = CHECKSUM_PARTIAL;
+
 
 	cork->length += length;
 
@@ -943,9 +973,16 @@ static int __ip_append_data(struct sock *sk,
 	 * adding appropriate IP header.
 	 */
 
+	/*
+     * 获取输出队列末尾的SKB，如果获取不到，说明输出队列为空，则需
+     * 分配一个新的SKB用于复制数据。
+     */
 	if (!skb)
 		goto alloc_new_skb;
 
+	/*
+     * 循环处理待输出数据包，直至所有的数据都处理完成。
+     */
 	while (length > 0) {
 		/* Check if the remaining data fits into current packet. */
 		copy = mtu - skb->len;
@@ -1062,6 +1099,7 @@ alloc_new_skb:
 				skb->sk = sk;
 				wmem_alloc_delta += skb->truesize;
 			}
+			// 将skb插入发送队列
 			__skb_queue_tail(queue, skb);
 			continue;
 		}
@@ -1228,9 +1266,24 @@ int ip_append_data(struct sock *sk, struct flowi4 *fl4,
 	struct inet_sock *inet = inet_sk(sk);
 	int err;
 
+	/*
+     * 如果使用MSG_PROBE标识，实际上并不会进行真正的数据传递，而是
+     * 进行路径MTU的探测
+     */
 	if (flags&MSG_PROBE)
 		return 0;
 
+	/*
+     * 如果传输控制块的输出队列为空，则需要为传输控制块设置一些临时
+     * 信息。
+     * 如果输出数据包中存在IP选项，则将IP选项信息复制到临时信息块中，
+     * 并设置IPCORK_OPT，表示临时信息块中存在IP选项。由于存在IP选项，
+     * 因此需要设置临时信息块中的目的地址，因为在IP选项中存在
+     * 源路由选项。
+     * 同时还设置了IP数据包分片大小，输出路由缓存、初始化当前发送
+     * 数据包中数据的长度（如果启用了IPsec，则还要加上IPsec首部的
+     * 长度）等。
+     */
 	if (skb_queue_empty(&sk->sk_write_queue)) {
 		err = ip_setup_cork(sk, &inet->cork.base, ipc, rtp);
 		if (err)

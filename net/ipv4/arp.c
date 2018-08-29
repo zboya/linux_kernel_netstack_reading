@@ -152,6 +152,7 @@ static const struct neigh_ops arp_direct_ops = {
 	.connected_output =	neigh_direct_output,
 };
 
+//ARP全局变量，ARP缓存表 邻居表
 struct neigh_table arp_tbl = {
 	.family		= AF_INET,
 	.key_len	= 4,

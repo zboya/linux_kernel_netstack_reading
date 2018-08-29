@@ -43,6 +43,10 @@
 
 #define DEBUG
 #define NEIGH_DEBUG 1
+// ? 这里为何需要加 do while(0)
+// https://blog.csdn.net/morixinguan/article/details/50726007
+// 为什么内核代码要这样来做，这是因为内核代码采用do{}while(0);
+// 这种结构可以保证无论在什么地方都可以正确的执行一次 ，这就是它用得最妙的地方
 #define neigh_dbg(level, fmt, ...)		\
 do {						\
 	if (level <= NEIGH_DEBUG)		\
@@ -163,6 +167,7 @@ bool neigh_remove_one(struct neighbour *ndel, struct neigh_table *tbl)
 	return false;
 }
 
+//用来作为是否进行垃圾回收的判断条件。
 static int neigh_forced_gc(struct neigh_table *tbl)
 {
 	int shrunk = 0;
@@ -300,6 +305,7 @@ int neigh_ifdown(struct neigh_table *tbl, struct net_device *dev)
 }
 EXPORT_SYMBOL(neigh_ifdown);
 
+// 该函数里面会添加定时器，用于发送ARP请求
 static struct neighbour *neigh_alloc(struct neigh_table *tbl, struct net_device *dev)
 {
 	struct neighbour *n = NULL;
@@ -433,6 +439,7 @@ static struct neigh_hash_table *neigh_hash_grow(struct neigh_table *tbl,
 	return new_nht;
 }
 
+//neigh_lookup只需要读邻居表。而neigh_periodic_timer则血药读写邻居表
 struct neighbour *neigh_lookup(struct neigh_table *tbl, const void *pkey,
 			       struct net_device *dev)
 {
@@ -484,6 +491,7 @@ struct neighbour *neigh_lookup_nodev(struct neigh_table *tbl, struct net *net,
 }
 EXPORT_SYMBOL(neigh_lookup_nodev);
 
+// 创建邻居表项
 struct neighbour *__neigh_create(struct neigh_table *tbl, const void *pkey,
 				 struct net_device *dev, bool want_ref)
 {

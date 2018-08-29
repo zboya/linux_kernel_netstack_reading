@@ -67,18 +67,58 @@ enum {
 	NEIGH_VAR_MAX
 };
 
+/*
+ * 邻居协议参数配置块，用于存储可调节的邻居协议
+ * 参数，如重传超时时间、proxy_queue队列长度等。一个
+ * 邻居协议对应一个参数配置块，而每一个网络设备
+ * 的IPv4的配置块中也存在一个存放默认值的邻居配置
+ * 块。
+ */
 struct neigh_parms {
 	possible_net_t net;
+	/*
+	 * 指向该neigh_parms实例所对应的网络设备，
+	 * 在通过neigh_parms_alloc()创建neigh_parms实例时
+	 * 设置。
+	 */
 	struct net_device *dev;
+	/*
+	 * 通过list将属于同一个协议族的所有neigh_parms实例
+	 * 链接在一起，每个neigh_table实例都有各自的neigh_parms
+	 * 队列。
+	 */
 	struct list_head list;
+	/*
+	 * 提供给那些仍在使用老式接口设备的初始化和销毁
+	 * 接口。net_device结构中也有一个neigh_setup成员函数指针，
+	 * 不要与之混淆。
+	 */
 	int	(*neigh_setup)(struct neighbour *);
 	void	(*neigh_cleanup)(struct neighbour *);
+	/*
+	 * 指向该neigh_parms实例所属的邻居表。
+	 */
 	struct neigh_table *tbl;
-
+	/*
+	 * 邻居表的sysctl表，对ARP是在ARP模块初始化函数
+	 * arp_init()中对其初始化的，这样用户可以通过
+	 * proc文件系统来读写邻居表的参数。
+	 */
 	void	*sysctl_table;
 
+	/*
+	 * 该字段值如果为1，则该邻居参数实例正在被删除，
+	 * 不能再使用，也不能再创建对应网络设备的邻居项。
+	 * 例如，在网络设备禁用时调用neigh_parms_release()设置。
+	 */
 	int dead;
+	/*
+	 * 引用计数。
+	 */
 	refcount_t refcnt;
+	/*
+	 * 为控制同步访问而设置的参数。
+	 */
 	struct rcu_head rcu_head;
 
 	int	reachable_time;
@@ -132,6 +172,7 @@ struct neigh_statistics {
 
 #define NEIGH_CACHE_STAT_INC(tbl, field) this_cpu_inc((tbl)->stats->field)
 
+// 邻居的结构体
 struct neighbour {
 	struct neighbour __rcu	*next;
 	struct neigh_table	*tbl;
@@ -152,6 +193,29 @@ struct neighbour {
 	seqlock_t		ha_lock;
 	unsigned char		ha[ALIGN(MAX_ADDR_LEN, sizeof(unsigned long))];
 	struct hh_cache		hh;
+	// Show Uses: (18)
+	// linux/include/net/neighbour.h (1)
+	// neigh_output (1 r)
+	// linux/net/atm/clip.c (1)
+	// clip_constructor (1 w)
+	// linux/net/bridge/br_netfilter_hooks.c (1)
+	// br_nf_pre_routing_finish_bridge (1 r)
+	// linux/net/core/neighbour.c (6)
+	// neigh_flush_dev (1 w)
+	// neigh_alloc (1 w)
+	// neigh_suspect (1 w)
+	// neigh_connect (1 w)
+	// neigh_update (1 r)
+	// neigh_xmit (1 r)
+	// linux/net/decnet/dn_neigh.c (2)
+	// dn_neigh_construct (1 w)
+	// dn_neigh_output_packet (1 r)
+	// linux/net/ipv4/arp.c (3)
+	// arp_constructor (3 w)
+	// linux/net/ipv6/ndisc.c (3)
+	// ndisc_constructor (3 w)
+	// linux/drivers/s390/net/qeth_l3_main.c (1)
+	// qeth_l3_neigh_setup_noarp (1 w)
 	int			(*output)(struct neighbour *, struct sk_buff *);
 	const struct neigh_ops	*ops;
 	struct rcu_head		rcu;
@@ -159,11 +223,41 @@ struct neighbour {
 	u8			primary_key[0];
 } __randomize_layout;
 
+/*
+ * neigh_ops结构实际上是一个函数指针表，包含了一组
+ * 函数指针，这些函数在一个neighbour实例的整个生命
+ * 周期内会被使用到，由此实现了三层和二层的
+ * dev_queue_xmit()之间的转接。
+ */
 struct neigh_ops {
+	/*
+	 * 标识所属的地址族，比如ARP为AF_INET等。
+	 */
 	int			family;
+	/*
+	 * 发送请求报文函数。在发送第一个报文时，需要
+	 * 新的邻居项，发送报文被缓存到arp_queue队列中，
+	 * 然后会调用solicit()发送请求报文。
+	 */
 	void			(*solicit)(struct neighbour *, struct sk_buff *);
+	/*
+	 * 当邻居项缓存着未发送的报文，而该邻居项又不可达时，
+	 * 被调用来向三层报告错误的函数。ARP中为arp_error_report()，
+	 * 最终会给报文发送方发送一个主机不可达的ICMP差错报文。
+	 */
 	void			(*error_report)(struct neighbour *, struct sk_buff *);
+	/*
+	 * 最通用的输出函数，可用于所有情况。此输出函数实现了
+	 * 完整的输出过程，因此存在较多的校验与操作，以确保
+	 * 报文的输出，因此该函数相对较消耗资源。此外，不要
+	 * 将neigh_ops->output()与neighbour->output()混淆。
+	 */
 	int			(*output)(struct neighbour *, struct sk_buff *);
+	/*
+	 * 在确定邻居可达时，即状态为NUD_CONNECTED时使用的输出函数。
+	 * 由于所有输出所需要的信息都已具备，因此该函数只是简单
+	 * 地添加二层首部，也因此比output()快得多。
+	 */
 	int			(*connected_output)(struct neighbour *, struct sk_buff *);
 };
 
@@ -188,7 +282,7 @@ struct neigh_hash_table {
 	struct rcu_head		rcu;
 };
 
-
+// 邻居表，在ipv4中就是arp表
 struct neigh_table {
 	int			family;
 	unsigned int		entry_size;
