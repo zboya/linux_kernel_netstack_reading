@@ -184,8 +184,9 @@ int ip_build_and_send_pkt(struct sk_buff *skb, const struct sock *sk,
 EXPORT_SYMBOL_GPL(ip_build_and_send_pkt);
 
 /*
- * 此函数通过邻居子系统将数据包输出
- * 到网络设备。
+ * 此函数通过邻居子系统将数据包输出到网络设备。
+ * 先调用__ipv4_neigh_lookup_noref从邻居表查找邻居，
+ * 如果没找到，则用__neigh_create新建一个
  */
 static int ip_finish_output2(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
@@ -225,7 +226,9 @@ static int ip_finish_output2(struct net *net, struct sock *sk, struct sk_buff *s
 
 	rcu_read_lock_bh();
 	nexthop = (__force u32) rt_nexthop(rt, ip_hdr(skb)->daddr);
+	// 调用__ipv4_neigh_lookup_noref从邻居表查找邻居
 	neigh = __ipv4_neigh_lookup_noref(dev, nexthop);
+	// 如果没有找到邻居则新建一个
 	if (unlikely(!neigh))
 		neigh = __neigh_create(&arp_tbl, &nexthop, dev, false);
 

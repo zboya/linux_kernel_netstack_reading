@@ -222,6 +222,7 @@ static bool arp_key_eq(const struct neighbour *neigh, const void *pkey)
 	return neigh_key_eq32(neigh, pkey);
 }
 
+// 初始化neigh的一些参数
 static int arp_constructor(struct neighbour *neigh)
 {
 	__be32 addr;
@@ -268,14 +269,14 @@ static int arp_constructor(struct neighbour *neigh)
 		   in old paradigm.
 		 */
 
-		if (neigh->type == RTN_MULTICAST) {
+		if (neigh->type == RTN_MULTICAST) { //组播地址不需要arp
 			neigh->nud_state = NUD_NOARP;
 			arp_mc_map(addr, neigh->ha, dev, 1);
-		} else if (dev->flags & (IFF_NOARP | IFF_LOOPBACK)) {
+		} else if (dev->flags & (IFF_NOARP | IFF_LOOPBACK)) { //设备明确不需要arp或本地回环设备，不需要arp
 			neigh->nud_state = NUD_NOARP;
 			memcpy(neigh->ha, dev->dev_addr, dev->addr_len);
 		} else if (neigh->type == RTN_BROADCAST ||
-			   (dev->flags & IFF_POINTOPOINT)) {
+			   (dev->flags & IFF_POINTOPOINT)) {  //广播或点对点，也不需要arp
 			neigh->nud_state = NUD_NOARP;
 			memcpy(neigh->ha, dev->broadcast, dev->addr_len);
 		}
@@ -285,10 +286,12 @@ static int arp_constructor(struct neighbour *neigh)
 		else
 			neigh->ops = &arp_generic_ops;
 
+		// 如果neigh的状态是NUD_VALID，设置output为connected_output
 		if (neigh->nud_state & NUD_VALID)
 			neigh->output = neigh->ops->connected_output;
 		else
-			neigh->output = neigh->ops->output;
+			//初始阶段为该值，即arp_hh_ops的neigh_resolve_output函数
+			neigh->output = neigh->ops->output; 
 	}
 	return 0;
 }
@@ -332,6 +335,8 @@ void arp_send(int type, int ptype, __be32 dest_ip,
 }
 EXPORT_SYMBOL(arp_send);
 
+// 探测邻居，会调用arp_send_dst发送一个arp请求
+// arp_rcv会对返回的arp响应进行处理
 static void arp_solicit(struct neighbour *neigh, struct sk_buff *skb)
 {
 	__be32 saddr = 0;
