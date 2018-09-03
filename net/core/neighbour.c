@@ -205,6 +205,7 @@ static int neigh_forced_gc(struct neigh_table *tbl)
 	return shrunk;
 }
 
+// 更新timer定时器，定义when时间点超时
 static void neigh_add_timer(struct neighbour *n, unsigned long when)
 {
 	neigh_hold(n);
@@ -306,6 +307,7 @@ int neigh_ifdown(struct neigh_table *tbl, struct net_device *dev)
 EXPORT_SYMBOL(neigh_ifdown);
 
 // 该函数里面会添加定时器，用于发送ARP请求
+// 分配且初始化一个邻居表
 static struct neighbour *neigh_alloc(struct neigh_table *tbl, struct net_device *dev)
 {
 	struct neighbour *n = NULL;
@@ -491,13 +493,14 @@ struct neighbour *neigh_lookup_nodev(struct neigh_table *tbl, struct net *net,
 }
 EXPORT_SYMBOL(neigh_lookup_nodev);
 
-// 创建邻居表项
+// 创建邻居表项，tbl参数在arp中为arp_tbl
 struct neighbour *__neigh_create(struct neigh_table *tbl, const void *pkey,
 				 struct net_device *dev, bool want_ref)
 {
 	u32 hash_val;
 	unsigned int key_len = tbl->key_len;
 	int error;
+	// 分配一个邻居表给n
 	struct neighbour *n1, *rc, *n = neigh_alloc(tbl, dev);
 	struct neigh_hash_table *nht;
 
@@ -511,6 +514,9 @@ struct neighbour *__neigh_create(struct neigh_table *tbl, const void *pkey,
 	dev_hold(dev);
 
 	/* Protocol specific setup. */
+	// 执行与协议相关的初始化函数，arp中为arp_constructor，会设置output函数
+	// 最开始的时候会设置neigh_resolve_output为output
+	// neigh_resolve_output会发送arp请求，获取邻居信息
 	if (tbl->constructor &&	(error = tbl->constructor(n)) < 0) {
 		rc = ERR_PTR(error);
 		goto out_neigh_release;
@@ -540,6 +546,7 @@ struct neighbour *__neigh_create(struct neigh_table *tbl, const void *pkey,
 	if (atomic_read(&tbl->entries) > (1 << nht->hash_shift))
 		nht = neigh_hash_grow(tbl, nht->hash_shift + 1);
 
+	// 计算hash值
 	hash_val = tbl->hash(n->primary_key, dev, nht->hash_rnd) >> (32 - nht->hash_shift);
 
 	if (n->parms->dead) {
@@ -560,6 +567,7 @@ struct neighbour *__neigh_create(struct neigh_table *tbl, const void *pkey,
 		}
 	}
 
+	// 如果在邻居表中没找n邻居项，则把n添加到邻居表中，并更新dead标志
 	n->dead = 0;
 	if (want_ref)
 		neigh_hold(n);
@@ -903,6 +911,7 @@ static void neigh_invalidate(struct neighbour *neigh)
 	neigh->arp_queue_len_bytes = 0;
 }
 
+// 探测邻居，如果为arp，则调用arp_solicit
 static void neigh_probe(struct neighbour *neigh)
 	__releases(neigh->lock)
 {
@@ -1005,6 +1014,7 @@ out:
 	neigh_release(neigh);
 }
 
+// 根据neigh->nud_state状态来出发相应的事件
 int __neigh_event_send(struct neighbour *neigh, struct sk_buff *skb)
 {
 	int rc;
@@ -1018,18 +1028,18 @@ int __neigh_event_send(struct neighbour *neigh, struct sk_buff *skb)
 	if (neigh->dead)
 		goto out_dead;
 
-	if (!(neigh->nud_state & (NUD_STALE | NUD_INCOMPLETE))) {
+	if (!(neigh->nud_state & (NUD_STALE | NUD_INCOMPLETE))) { //初始阶段进入此分支
 		if (NEIGH_VAR(neigh->parms, MCAST_PROBES) +
 		    NEIGH_VAR(neigh->parms, APP_PROBES)) {
 			unsigned long next, now = jiffies;
 
 			atomic_set(&neigh->probes,
 				   NEIGH_VAR(neigh->parms, UCAST_PROBES));
-			neigh->nud_state     = NUD_INCOMPLETE;
+			neigh->nud_state     = NUD_INCOMPLETE; //设置表项状态为incomplete
 			neigh->updated = now;
 			next = now + max(NEIGH_VAR(neigh->parms, RETRANS_TIME),
 					 HZ/2);
-			neigh_add_timer(neigh, next);
+			neigh_add_timer(neigh, next); //触发定时器，期望刷新表项状态和output函数，500毫秒后执行
 			immediate_probe = true;
 		} else {
 			neigh->nud_state = NUD_FAILED;
@@ -1050,7 +1060,7 @@ int __neigh_event_send(struct neighbour *neigh, struct sk_buff *skb)
 	if (neigh->nud_state == NUD_INCOMPLETE) {
 		if (skb) {
 			while (neigh->arp_queue_len_bytes + skb->truesize >
-			       NEIGH_VAR(neigh->parms, QUEUE_LEN_BYTES)) {
+			       NEIGH_VAR(neigh->parms, QUEUE_LEN_BYTES)) {  //如果等待发送的报文数量超过设定值，丢弃报文
 				struct sk_buff *buff;
 
 				buff = __skb_dequeue(&neigh->arp_queue);
@@ -1067,8 +1077,8 @@ int __neigh_event_send(struct neighbour *neigh, struct sk_buff *skb)
 		rc = 1;
 	}
 out_unlock_bh:
-	if (immediate_probe)
-		neigh_probe(neigh);
+	if (immediate_probe)	//初始阶段，邻居项设置状态设置为incomplete，同时设置该变量为true
+		neigh_probe(neigh);	//探测邻居表项
 	else
 		write_unlock(&neigh->lock);
 	local_bh_enable();
@@ -1342,17 +1352,17 @@ static void neigh_hh_init(struct neighbour *n)
 }
 
 /* Slow and careful. */
-
+// 调用neigh_event_send函数来发送arp请求，以及邻居项的添加
 int neigh_resolve_output(struct neighbour *neigh, struct sk_buff *skb)
 {
 	int rc = 0;
-
+	//发送arp请求，第一次返回true
 	if (!neigh_event_send(neigh, skb)) {
 		int err;
 		struct net_device *dev = neigh->dev;
 		unsigned int seq;
 
-		if (dev->header_ops->cache && !neigh->hh.hh_len)
+		if (dev->header_ops->cache && !neigh->hh.hh_len) //初始化MAC缓存值，目的是加速
 			neigh_hh_init(neigh);
 
 		do {
@@ -1363,7 +1373,7 @@ int neigh_resolve_output(struct neighbour *neigh, struct sk_buff *skb)
 		} while (read_seqretry(&neigh->ha_lock, seq));
 
 		if (err >= 0)
-			rc = dev_queue_xmit(skb);
+			rc = dev_queue_xmit(skb); //二层发送报文
 		else
 			goto out_kfree_skb;
 	}
@@ -1547,6 +1557,7 @@ static void neigh_parms_destroy(struct neigh_parms *parms)
 
 static struct lock_class_key neigh_table_proxy_queue_class;
 
+//一个neigh_table结构实例对应一个邻居协议，所有的实例都连接在全局链表neigh_tables中。对于arp协议，neigh_table结构实例是arp_tbl。
 static struct neigh_table *neigh_tables[NEIGH_NR_TABLES] __read_mostly;
 
 void neigh_table_init(int index, struct neigh_table *tbl)

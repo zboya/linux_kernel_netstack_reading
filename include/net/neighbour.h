@@ -519,12 +519,14 @@ static inline struct neighbour * neigh_clone(struct neighbour *neigh)
 
 #define neigh_hold(n)	refcount_inc(&(n)->refcnt)
 
+// 调用__neigh_event_send
 static inline int neigh_event_send(struct neighbour *neigh, struct sk_buff *skb)
 {
 	unsigned long now = jiffies;
 	
 	if (neigh->used != now)
 		neigh->used = now;
+	// 如果没设置NUD_CONNECTED|NUD_DELAY|NUD_PROBE
 	if (!(neigh->nud_state&(NUD_CONNECTED|NUD_DELAY|NUD_PROBE)))
 		return __neigh_event_send(neigh, skb);
 	return 0;
@@ -570,10 +572,10 @@ static inline int neigh_output(struct neighbour *n, struct sk_buff *skb)
 {
 	const struct hh_cache *hh = &n->hh;
 
-	if ((n->nud_state & NUD_CONNECTED) && hh->hh_len)
+	if ((n->nud_state & NUD_CONNECTED) && hh->hh_len) //如果neighbour已连接且hh已设置
 		return neigh_hh_output(hh, skb);
 	else
-		return n->output(n, skb);
+		return n->output(n, skb); //初始阶段调用此函数，此时为neigh_resolve_output函数
 }
 
 static inline struct neighbour *
