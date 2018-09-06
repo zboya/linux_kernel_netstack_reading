@@ -1740,7 +1740,7 @@ static void tcp_v4_fill_cb(struct sk_buff *skb, const struct iphdr *iph,
  *	From tcp_input.c
  */
 
-// 当3层的数据包到达之后会调用4层的协议handle,tcp的话就是tcp_v4_rcv
+// 当3层的数据包到达之后会调用4层的协议handle,tcp4的话就是tcp_v4_rcv
 int tcp_v4_rcv(struct sk_buff *skb)
 {
 	struct net *net = dev_net(skb->dev);
@@ -1751,6 +1751,7 @@ int tcp_v4_rcv(struct sk_buff *skb)
 	struct sock *sk;
 	int ret;
 
+	// 如果pkt_type不是给我们的那么，丢弃
 	if (skb->pkt_type != PACKET_HOST)
 		goto discard_it;
 
@@ -1760,8 +1761,10 @@ int tcp_v4_rcv(struct sk_buff *skb)
 	if (!pskb_may_pull(skb, sizeof(struct tcphdr)))
 		goto discard_it;
 
+	// 获取tcp的头部信息，不包括tcp options的信息
 	th = (const struct tcphdr *)skb->data;
 
+	// 如果data offset小于tcp头部的长度/4，说明这个包是坏的
 	if (unlikely(th->doff < sizeof(struct tcphdr) / 4))
 		goto bad_packet;
 	if (!pskb_may_pull(skb, th->doff * 4))
@@ -1775,23 +1778,27 @@ int tcp_v4_rcv(struct sk_buff *skb)
 	if (skb_checksum_init(skb, IPPROTO_TCP, inet_compute_pseudo))
 		goto csum_error;
 
+	// ? 之前已经获取了，为何要再获取一次
 	th = (const struct tcphdr *)skb->data;
 	iph = ip_hdr(skb);
 lookup:
+	// 根据四元组查找tcp连接，srp_port,src_ip, dst_port,dst_ip
 	sk = __inet_lookup_skb(&tcp_hashinfo, skb, __tcp_hdrlen(th), th->source,
 			       th->dest, sdif, &refcounted);
 	if (!sk)
 		goto no_tcp_socket;
 
 process:
+	// 如果状态为TCP_TIME_WAIT，跳转到do_time_wait
 	if (sk->sk_state == TCP_TIME_WAIT)
 		goto do_time_wait;
 
+	// 处理三次握手中接收到syn报文后
 	if (sk->sk_state == TCP_NEW_SYN_RECV) {
 		struct request_sock *req = inet_reqsk(sk);
 		bool req_stolen = false;
 		struct sock *nsk;
-
+		// 
 		sk = req->rsk_listener;
 		if (unlikely(tcp_v4_inbound_md5_hash(sk, skb))) {
 			sk_drops_add(sk, skb);

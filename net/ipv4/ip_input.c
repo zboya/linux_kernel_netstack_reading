@@ -204,13 +204,16 @@ static int ip_local_deliver_finish(struct net *net, struct sock *sk, struct sk_b
 
 	rcu_read_lock();
 	{
+		// 获取ip头里的协议
 		int protocol = ip_hdr(skb)->protocol;
 		const struct net_protocol *ipprot;
 		int raw;
 
 	resubmit:
+		// 分发处理原始套接字
 		raw = raw_local_deliver(skb, protocol);
 
+		// 根据协议来获取协议的handler函数，如果协议为tcp，那么为tcp_v4_rcv
 		ipprot = rcu_dereference(inet_protos[protocol]);
 		if (ipprot) {
 			int ret;
@@ -222,6 +225,7 @@ static int ip_local_deliver_finish(struct net *net, struct sock *sk, struct sk_b
 				}
 				nf_reset(skb);
 			}
+			// 用协议的处理函数处理skb
 			ret = ipprot->handler(skb);
 			if (ret < 0) {
 				protocol = -ret;
