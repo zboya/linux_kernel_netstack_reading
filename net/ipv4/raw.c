@@ -209,6 +209,7 @@ out:
 	return delivered;
 }
 
+// 分发处理原始套接字
 int raw_local_deliver(struct sk_buff *skb, int protocol)
 {
 	int hash;
