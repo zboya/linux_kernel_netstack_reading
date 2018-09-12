@@ -536,6 +536,17 @@ static void tcp_rcv_rtt_update(struct tcp_sock *tp, u32 sample, int win_dep)
 	tp->rcv_rtt_est.rtt_us = new_sample;
 }
 
+// 接收端估计RTT， 使用时间戳
+//               timestamp = time_
+// TCP receiver -----------------------> TCP sender
+//               ACK packet                  |
+//                                           |
+//                echo timestamp = time_     |  
+//     计算RTT  <----------------------------- 
+//                 Data packet  
+
+//     RTT = time_now - time_;  
+// http://blog.chinaunix.net/uid-28387257-id-4149312.html
 static inline void tcp_rcv_rtt_measure(struct tcp_sock *tp)
 {
 	u32 delta_us;
@@ -554,6 +565,11 @@ new_measure:
 	tp->rcv_rtt_est.time = tp->tcp_mstamp;
 }
 
+// 接收端估计RTT，不使用时间戳
+// 判断接收端是否已经收到了一个接收窗口的数据。把这个时间间隔作为一个RTT。
+// 然而，这种方法有明显的缺陷，就是RTT偏大，发送端cwnd通常小于接收端awnd。
+// 并且这种方法在丢包时，RTT测量也会偏大，因为丢包时，收取一个满窗的数据可能要等很久。
+// http://blog.chinaunix.net/uid-28387257-id-4149312.html
 static inline void tcp_rcv_rtt_measure_ts(struct sock *sk,
 					  const struct sk_buff *skb)
 {
@@ -3504,12 +3520,19 @@ static void tcp_xmit_recovery(struct sock *sk, int rexmit)
  * @skb: 接收到的ACK段
  * @flag: 标志，取值为FLAG_DATA等
  */
+// TCP发送ACK的情况分为以下几类：
+// （1）收到非法报文时
+// （2）进程从TCP接收缓存读取数据后；这时通告窗口可能会变大
+// （3）收到数据时；这时通告窗口可能会变小，发送ACK会告知对端更新窗口，并释放已经接收的数据
+// （4）发送数据段时
+// （5）收到带SYN、FIN标记的包时
 static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct tcp_sacktag_state sack_state;
 	struct rate_sample rs = { .prior_delivered = 0 };
+	// snd_una为最小发送未确认的序号
 	u32 prior_snd_una = tp->snd_una;
 	bool is_sack_reneg = tp->is_sack_reneg;
 	u32 ack_seq = TCP_SKB_CB(skb)->seq;
@@ -4440,6 +4463,7 @@ static void tcp_drop(struct sock *sk, struct sk_buff *skb)
 /* This one checks to see if we can put data from the
  * out_of_order queue into the receive_queue.
  */
+// 乱序数据的重组由tcp_ofo_queue函数完成
 static void tcp_ofo_queue(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -4511,6 +4535,7 @@ static int tcp_try_rmem_schedule(struct sock *sk, struct sk_buff *skb,
 	return 0;
 }
 
+// tcp_data_queue_ofo 负责将乱序包按照seq顺序放入乱序队列中，并设置SACK选项信息
 static void tcp_data_queue_ofo(struct sock *sk, struct sk_buff *skb)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -4521,6 +4546,7 @@ static void tcp_data_queue_ofo(struct sock *sk, struct sk_buff *skb)
 
 	tcp_ecn_check_ce(tp, skb);
 
+	// 检查接收缓存空间是否能容纳skb
 	if (unlikely(tcp_try_rmem_schedule(sk, skb, skb->truesize))) {
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPOFODROP);
 		tcp_drop(sk, skb);
@@ -4529,6 +4555,7 @@ static void tcp_data_queue_ofo(struct sock *sk, struct sk_buff *skb)
 
 	/* Disable header prediction. */
 	tp->pred_flags = 0;
+	//标识此socket正在等待发送ACK，如果以后有数据要发送的话会尽快发送，以便将携带的ACK尽快发送到对端
 	inet_csk_schedule_ack(sk);
 
 	NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPOFOQUEUE);
@@ -4647,6 +4674,8 @@ end:
 	}
 }
 
+// 尝试消费接收到的数据，并插入接收队列
+// 无论skb是否整合成功，tcp_queue_rcv函数最终会将skb的数据部分放入到sk->sk_receive_queue中。
 static int __must_check tcp_queue_rcv(struct sock *sk, struct sk_buff *skb, int hdrlen,
 		  bool *fragstolen)
 {
@@ -4721,11 +4750,13 @@ static void tcp_data_queue(struct sock *sk, struct sk_buff *skb)
 	bool fragstolen;
 	int eaten;
 
+	// 没有payload数据
 	if (TCP_SKB_CB(skb)->seq == TCP_SKB_CB(skb)->end_seq) {
 		__kfree_skb(skb);
 		return;
 	}
 	skb_dst_drop(skb);
+	// 将skb-data指向tcp数据段
 	__skb_pull(skb, tcp_hdr(skb)->doff * 4);
 
 	tcp_ecn_accept_cwr(tp, skb);
@@ -4736,8 +4767,10 @@ static void tcp_data_queue(struct sock *sk, struct sk_buff *skb)
 	 *  Packets in sequence go to the receive queue.
 	 *  Out of sequence packets to the out_of_order_queue.
 	 */
+	// 正序包
 	if (TCP_SKB_CB(skb)->seq == tp->rcv_nxt) {
-		if (tcp_receive_window(tp) == 0)
+		// 接收wnd无法容纳新数据
+		if (tcp_receive_window(tp) == 0) 
 			goto out_of_window;
 
 		/* Ok. In sequence. In window. */
@@ -4776,6 +4809,8 @@ queue_and_out:
 		return;
 	}
 
+	// 处理非正序包
+	// 旧包，end_seq比rcv_nxt小，丢弃
 	if (!after(TCP_SKB_CB(skb)->end_seq, tp->rcv_nxt)) {
 		/* A retransmit, 2nd most common case.  Force an immediate ack. */
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_DELAYEDACKLOST);
@@ -4790,17 +4825,19 @@ drop:
 	}
 
 	/* Out of window. F.e. zero window probe. */
+	// 数据包超过可用窗口，丢弃
 	if (!before(TCP_SKB_CB(skb)->seq, tp->rcv_nxt + tcp_receive_window(tp)))
 		goto out_of_window;
 
 	tcp_enter_quickack_mode(sk);
-
-	if (before(TCP_SKB_CB(skb)->seq, tp->rcv_nxt)) {
+	//部分是旧数据，部分是新数据
+	if (before(TCP_SKB_CB(skb)->seq, tp->rcv_nxt)) { 
 		/* Partial packet, seq < rcv_next < end_seq */
 		SOCK_DEBUG(sk, "partial packet: rcv_next %X seq %X - %X\n",
 			   tp->rcv_nxt, TCP_SKB_CB(skb)->seq,
 			   TCP_SKB_CB(skb)->end_seq);
 
+		// 设置sack
 		tcp_dsack_set(sk, TCP_SKB_CB(skb)->seq, tp->rcv_nxt);
 
 		/* If window is closed, drop tail of packet. But after
@@ -4808,9 +4845,12 @@ drop:
 		 */
 		if (!tcp_receive_window(tp))
 			goto out_of_window;
+		
+		// 跳转到queue_and_out，将包
 		goto queue_and_out;
 	}
 
+	// 处理乱序包
 	tcp_data_queue_ofo(sk, skb);
 }
 
@@ -5466,6 +5506,23 @@ discard:
 * 如果传输控制块的状态为TCP_ESTABLISHED，则
 * 调用tcp_rcv_established()接收处理。
 */
+// 在Linux中，有两种方法来处理传入TCP数据段：
+// 快速路径（Fast Path）和慢速路径（Slow Path）。
+// 使用快速路径只进行最少的处理，如处理数据段、发生ACK、存储时间戳等。
+// 使用慢速路径可以处理乱序数据段、PAWS、socket内存管理和紧急数据等。
+// Linux通过预测标志来区分这两种处理模式，预测标志存储在tp->pred_flags，
+// 生成这个标志的函数是__tcp_fast_path_on和tcp_fast_path_on，
+// TCP会直接使用这两个函数来生成预测标记，也可以调用tcp_fast_path_check来完成这一任务
+// 
+// TCP报文段进入慢速路径处理的条件有：
+// （1）收到乱序数据或乱序队列非空
+// （2）收到紧急指针
+// （3）接收缓存耗尽
+// （4）收到0窗口通告
+// （5）收到的报文中含有除了PUSH和ACK之外的标记，如SYN、FIN、RST
+// （6）报文的时间戳选项解析失败
+// （7）报文的PAWS检查失败
+// https://blog.csdn.net/u011130578/article/details/44723635
 void tcp_rcv_established(struct sock *sk, struct sk_buff *skb,
 			 const struct tcphdr *th)
 {
@@ -5476,6 +5533,7 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb,
 	trace_tcp_probe(sk, skb);
 
 	tcp_mstamp_refresh(tp);
+	// 如果sk没设置缓存入口路由，那么设置一下
 	if (unlikely(!sk->sk_rx_dst))
 		inet_csk(sk)->icsk_af_ops->sk_rx_dst_set(sk, skb);
 	/*
@@ -5504,9 +5562,11 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb,
 	 *	PSH flag is ignored.
 	 */
 
-	if ((tcp_flag_word(th) & TCP_HP_BITS) == tp->pred_flags &&
-	    TCP_SKB_CB(skb)->seq == tp->rcv_nxt &&
-	    !after(TCP_SKB_CB(skb)->ack_seq, tp->snd_nxt)) {
+	// 快速路径处理，说明报文是正常的
+	if ((tcp_flag_word(th) & TCP_HP_BITS) == tp->pred_flags && //预测标记匹配
+	    TCP_SKB_CB(skb)->seq == tp->rcv_nxt && //包的序列号恰好是本端期望接收的
+	    !after(TCP_SKB_CB(skb)->ack_seq, tp->snd_nxt)) { //确认号没有超出本端最新发送的数据的序列号
+		// 获取tcp_header_len，这个头部长度包括tcp选项的长度
 		int tcp_header_len = tp->tcp_header_len;
 
 		/* Timestamp header prediction: tcp_header_len
@@ -5517,11 +5577,11 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb,
 		/* Check timestamp */
 		if (tcp_header_len == sizeof(struct tcphdr) + TCPOLEN_TSTAMP_ALIGNED) {
 			/* No? Slow path! */
-			if (!tcp_parse_aligned_timestamp(tp, th))
+			if (!tcp_parse_aligned_timestamp(tp, th)) //解析时间戳选项失败
 				goto slow_path;
 
 			/* If PAWS failed, check it more carefully in slow path */
-			if ((s32)(tp->rx_opt.rcv_tsval - tp->rx_opt.ts_recent) < 0)
+			if ((s32)(tp->rx_opt.rcv_tsval - tp->rx_opt.ts_recent) < 0) //此包发送的时间比上个包早，可能是旧包，需仔细检查
 				goto slow_path;
 
 			/* DO NOT update ts_recent here, if checksum fails
@@ -5531,9 +5591,10 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb,
 			 */
 		}
 
+		// 如果skb的长度 <= tcp头部的长度
 		if (len <= tcp_header_len) {
 			/* Bulk data transfer: sender */
-			if (len == tcp_header_len) {
+			if (len == tcp_header_len) { // 如果skb的长度 == tcp头部的长度，包中无数据，一般就是ack包
 				/* Predicted packet is in window by definition.
 				 * seq == rcv_nxt and rcv_wup <= rcv_nxt.
 				 * Hence, check seq<=rcv_wup reduces to:
@@ -5546,21 +5607,22 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb,
 				/* We know that such packets are checksummed
 				 * on entry.
 				 */
-				tcp_ack(sk, skb, 0);
+				tcp_ack(sk, skb, 0); //处理ACK标记
 				__kfree_skb(skb);
-				tcp_data_snd_check(sk);
+				tcp_data_snd_check(sk); //发送发送缓存中尚未发送的包
 				return;
-			} else { /* Header too small */
+			} else { /* Header too small */ // 如果比tcp头部还小说明这个报文是无效的
 				TCP_INC_STATS(sock_net(sk), TCP_MIB_INERRS);
 				goto discard;
 			}
-		} else {
+		} else { // 如果skb的长度 > tcp头部的长度，包中有数据
 			int eaten = 0;
 			bool fragstolen = false;
 
 			if (tcp_checksum_complete(skb))
 				goto csum_error;
 
+			//skb的大小超过了发送队列中可以直接使用的空间大小（即已经分配了但尚未使用的空间）
 			if ((int)skb->truesize > sk->sk_forward_alloc)
 				goto step5;
 
@@ -5568,24 +5630,30 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb,
 			 * seq == rcv_nxt and rcv_wup <= rcv_nxt.
 			 * Hence, check seq<=rcv_wup reduces to:
 			 */
-			if (tcp_header_len ==
+			// 如果tcp_header_len == (tcp最小长度 + tcp时间戳选项长度)
+			if (tcp_header_len == 
 			    (sizeof(struct tcphdr) + TCPOLEN_TSTAMP_ALIGNED) &&
 			    tp->rcv_nxt == tp->rcv_wup)
-				tcp_store_ts_recent(tp);
+				tcp_store_ts_recent(tp); // 记录接收相关的时间戳
 
 			tcp_rcv_rtt_measure_ts(sk, skb);
 
 			NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPHPHITS);
 
 			/* Bulk data transfer: receiver */
+			// 将当前包放入接收队列中；此包并非乱序包，可以直接放入接收队列
+			// 返回的值表示是否有消费skb
 			eaten = tcp_queue_rcv(sk, skb, tcp_header_len,
 					      &fragstolen);
 
+			// 更新拥塞控制信息（包括拥塞窗口）
 			tcp_event_data_recv(sk, skb);
 
 			if (TCP_SKB_CB(skb)->ack_seq != tp->snd_una) {
 				/* Well, only one small jumplet in fast path... */
+				// 调用tcp_ack进行处理
 				tcp_ack(sk, skb, FLAG_DATA);
+				// 试图发送一下发送队列中的数据
 				tcp_data_snd_check(sk);
 				if (!inet_csk_ack_scheduled(sk))
 					goto no_ack;
@@ -5595,12 +5663,13 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb,
 no_ack:
 			if (eaten)
 				kfree_skb_partial(skb, fragstolen);
-			sk->sk_data_ready(sk);
+			sk->sk_data_ready(sk); //调用sock_def_readable函数通知进程有数据可读
 			return;
 		}
 	}
 
 slow_path:
+	// 报文长度有错或者校验和有错
 	if (len < (th->doff << 2) || tcp_checksum_complete(skb))
 		goto csum_error;
 
@@ -5611,22 +5680,27 @@ slow_path:
 	 *	Standard slow path.
 	 */
 
+	// 其他有效性检查
 	if (!tcp_validate_incoming(sk, skb, th, 1))
 		return;
 
 step5:
+	// ack非法则丢弃
 	if (tcp_ack(sk, skb, FLAG_SLOWPATH | FLAG_UPDATE_TS_RECENT) < 0)
 		goto discard;
 
+	// 测量更新RTT估计值
 	tcp_rcv_rtt_measure_ts(sk, skb);
 
 	/* Process urgent data. */
 	tcp_urg(sk, skb, th);
 
 	/* step 7: process the segment text */
+	// 处理报文，包括丢、包乱序等
 	tcp_data_queue(sk, skb);
-
+	// 试图发送队列中的数据
 	tcp_data_snd_check(sk);
+	// 试图发送ack
 	tcp_ack_snd_check(sk);
 	return;
 
@@ -6058,7 +6132,7 @@ reset_and_undo:
  *	address independent.
  */
 
-//这里说明在连接建立的过程中只能是客户端收到SYN+ACK,或者是服务器端收到SYN。连接断开的过程也会走到这里面
+// 处理 除了ESTABLISHED 和 TIME_WAIT 的其他状态
 int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -6085,8 +6159,8 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		if (th->rst)
 			goto discard;
 
-		if (th->syn) {
-			if (th->fin)
+		if (th->syn) { // 这是个sync报文
+			if (th->fin) // 如果也是fin报文，直接丢弃
 				goto discard;
 			/* It is possible that we process SYN packets from backlog,
 			 * so we need to make sure to disable BH right there.
@@ -6096,7 +6170,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 			 * icsk_af_ops成员在创建套接字时被初始化，参见tcp_v4_init_sock()
 			 */
 			local_bh_disable();
-			// 收到三次握手的第一步SYN，则在tcp_v4_conn_request中创建连接请求控制块
+			// 收到三次握手的第一步SYN，则在 tcp_v4_conn_request 中创建连接请求控制块
 			acceptable = icsk->icsk_af_ops->conn_request(sk, skb) >= 0;
 			local_bh_enable();
 
@@ -6165,6 +6239,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		tcp_send_challenge_ack(sk, skb);
 		goto discard;
 	}
+
 	switch (sk->sk_state) {
 	case TCP_SYN_RECV:
 	//这里是由tcp_v4_do_rcv里面的tcp_child_process走到这里，在tcp_child_process前会通过tcp_v4_hnd_req创建一个新的struct sock
@@ -6234,6 +6309,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		/*
 		* 计算有关TCP首部预测的标志
 		*/
+		// 预计是否开启快速路径
 		tcp_fast_path_on(tp);
 		break;
 
@@ -6567,7 +6643,8 @@ static void tcp_reqsk_record_syn(const struct sock *sk,
 	}
 }
 
-// 服务端处理sync请求，由tcp_v4_conn_request调用
+// 服务端处理sync请求，由 tcp_v4_conn_request 调用
+// 接收到sync请求后，需要返回sync+ack
 int tcp_conn_request(struct request_sock_ops *rsk_ops,
 		     const struct tcp_request_sock_ops *af_ops,
 		     struct sock *sk, struct sk_buff *skb)

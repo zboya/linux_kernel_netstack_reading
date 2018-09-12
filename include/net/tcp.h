@@ -608,6 +608,11 @@ static inline u32 __tcp_set_rto(const struct tcp_sock *tp)
 	return usecs_to_jiffies((tp->srtt_us >> 3) + tp->rttvar_us);
 }
 
+// __tcp_fast_path_on 函数做的工作实际上是在构建TCP首部的第4个字节，
+// 即首部长度、标记位、窗口（格式见1.2节）。其中tp->tcp_header_len是首部长度的字节数，
+// TCP首部中记录首部长度的数值位于第4个字节的高4bit，即第28-31bit，
+// 而且这个数值乘以4才是首部长度的字节数。故tp->tcp_header_len需要左移28位，
+// 再右移2位（除以4），即左移26位。
 static inline void __tcp_fast_path_on(struct tcp_sock *tp, u32 snd_wnd)
 {
 	tp->pred_flags = htonl((tp->tcp_header_len << 26) |
@@ -620,6 +625,14 @@ static inline void tcp_fast_path_on(struct tcp_sock *tp)
 	__tcp_fast_path_on(tp, tp->snd_wnd >> tp->rx_opt.snd_wscale);
 }
 
+// TCP直接调用tcp_fast_path_check的时机有3处：
+// （1）tcp_recvmsg 当读过紧急数据时；紧急数据是由慢速路径处理，
+// 需要保持在慢速路径模式直到收完紧急数据，然后就可以开启快速路径模式了。
+// （2）tcp_ack_update_window 当发生方收到ACK并调用tcp_ack_update_window更新窗口时；
+// 通告窗口发生了变化，则必须更新预测标记，以免后续的输入报文因为窗口不符而进入慢速路径。
+// （3）当 tcp_data_queue 将数据放入接收队列时；
+// 这时可用的接收缓存大小发生变化，tcp_fast_path_check 会检查这个缓存的
+// 变化是否允许开启快速路径模式。
 static inline void tcp_fast_path_check(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -1075,6 +1088,8 @@ static inline bool tcp_is_reno(const struct tcp_sock *tp)
 	return !tcp_is_sack(tp);
 }
 
+// 离开主机网络且未确认的tcp seg数。包含2种情况：
+// 1. sack确认的段 2. 已丢失的段
 static inline unsigned int tcp_left_out(const struct tcp_sock *tp)
 {
 	return tp->sacked_out + tp->lost_out;

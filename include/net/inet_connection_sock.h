@@ -35,6 +35,10 @@ struct tcp_congestion_ops;
  * Pointers to address related TCP functions
  * (i.e. things that depend on the address family)
  */
+/*
+ * 封装了一组与传输层相关的操作集，包括向网络层发送的接口、传输层的
+ * setsockopt接口等。TCP中的实例为ipv4_specific
+*/
 struct inet_connection_sock_af_ops {
 	int	    (*queue_xmit)(struct sock *sk, struct sk_buff *skb, struct flowi *fl);
 	void	    (*send_check)(struct sock *sk, struct sk_buff *skb);
@@ -87,6 +91,11 @@ struct inet_connection_sock_af_ops {
  * @icsk_ext_hdr_len:	   Network protocol overhead (IP/IPv6 options)
  * @icsk_ack:		   Delayed ACK control data
  * @icsk_mtup;		   MTU probing control data
+ */
+/*
+ * inet_connection_sock结构是支持面向连接特性的描述块，构成
+ * IPv4协议族TCP控制块的基础，在inet_sock结构的基础上加入了
+ * 支持连接的特性。在net_sock基础上增加了连接 确认 重传等选项
  */
 struct inet_connection_sock {
 	/* inet_sock has to be the first member! */
