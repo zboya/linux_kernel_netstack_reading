@@ -144,16 +144,23 @@ static inline struct tcp_request_sock *tcp_rsk(const struct request_sock *req)
 	return (struct tcp_request_sock *)req;
 }
 
+// tcp_sock是tcp协议控制块，它在inet_connection_sock基础上扩展
+// 了滑动窗口，拥塞控制等tcp专有的一些属性
 struct tcp_sock {
 	/* inet_connection_sock has to be the first member of tcp_sock */
 	struct inet_connection_sock	inet_conn;
+	// tcp首部长度，包括tcp选项
 	u16	tcp_header_len;	/* Bytes of tcp header to send		*/
+	// 记录该sock发送到网络设备数据段的长度，在不支持tso的情况下
+	// 该长度等于mss，如果支持tso，就需要重新计算，具体见 tcp_current_mss()
 	u16	gso_segs;	/* Max number of segs per GSO packet	*/
 
 /*
  *	Header prediction flags
  *	0x5?10 << 16 + snd_wnd in net byte order
  */
+	// 首部预测标记，会在发送和接收sync，更新窗口或其他恰当的时候设置该标志
+	// 该标志判断快速或慢速路径的因素之一
 	__be32	pred_flags;
 
 /*
@@ -161,19 +168,26 @@ struct tcp_sock {
  *	read the code and the spec side by side (and laugh ...)
  *	See RFC793 and RFC1122. The RFC writes these in capitals.
  */
+	// 已确认的接收的字节数
 	u64	bytes_received;	/* RFC4898 tcpEStatsAppHCThruOctetsReceived
 				 * sum(delta(rcv_nxt)), or how many bytes
 				 * were acked.
 				 */
+	// 接收tcp段的累计
 	u32	segs_in;	/* RFC4898 tcpEStatsPerfSegsIn
 				 * total number of segments in.
 				 */
+	// 接收tcp数据段的累计
 	u32	data_segs_in;	/* RFC4898 tcpEStatsPerfDataSegsIn
 				 * total number of data segments in.
 				 */
+	// 下次期望接收的序列号
  	u32	rcv_nxt;	/* What we want to receive next 	*/
 	u32	copied_seq;	/* Head of yet unread data		*/
+	// 标识最早接收但未确认的段的序号，即当前接收窗口的左端
+	// 在发送ack时，由rcv_nxt更新，因此rcv_wup更新常比rcv_nxt滞后
 	u32	rcv_wup;	/* rcv_nxt on last window update sent	*/
+	// 下一个发送的开始序列号
  	u32	snd_nxt;	/* Next sequence we send		*/
 	u32	segs_out;	/* RFC4898 tcpEStatsPerfSegsOut
 				 * The total number of segments sent.
@@ -181,13 +195,18 @@ struct tcp_sock {
 	u32	data_segs_out;	/* RFC4898 tcpEStatsPerfDataSegsOut
 				 * total number of data segments sent.
 				 */
+	// ? 不知道和bytes_received有啥区别？
 	u64	bytes_acked;	/* RFC4898 tcpEStatsAppHCThruOctetsAcked
 				 * sum(delta(snd_una)), or how many bytes
 				 * were acked.
 				 */
+	// 最小发送未确认的序号
  	u32	snd_una;	/* First byte we want an ack for	*/
+	// 最近发送的小包
  	u32	snd_sml;	/* Last byte of the most recently transmitted small packet */
+	// 最后一次接收到ack段的时间，用于tcp保活
 	u32	rcv_tstamp;	/* timestamp of last received ACK (for keepalives) */
+	// 最后一次发包的时间，主要用于拥塞窗口的设置
 	u32	lsndtime;	/* timestamp of last sent data packet (for restart window) */
 	u32	last_oow_ack_time;  /* timestamp of last out-of-window ACK */
 
@@ -196,12 +215,19 @@ struct tcp_sock {
 	struct list_head tsq_node; /* anchor in tsq_tasklet.head list */
 	struct list_head tsorted_sent_queue; /* time-sorted sent but un-SACKed skbs */
 
+	// 记录更新发送窗口的那个ack段的序号，用来判断是否需要更新窗口
+	// 如果后续的ack号大于snd_wl1，则更新，否则不更新
 	u32	snd_wl1;	/* Sequence for window update		*/
+	// 接收方提供的接收窗口
 	u32	snd_wnd;	/* The window we expect to receive	*/
+	// 接收方通告过的最大窗口
 	u32	max_window;	/* Maximal window ever seen from peer	*/
+	// 发送方当前有效的mss
 	u32	mss_cache;	/* Cached effective mss, not including SACKS */
 
+	// 滑动窗口最大值
 	u32	window_clamp;	/* Maximal window to advertise		*/
+	// 当前接收窗口的阀值
 	u32	rcv_ssthresh;	/* Current window clamp			*/
 
 	/* Information of the most recently (s)acked skb */
@@ -224,8 +250,10 @@ struct tcp_sock {
 		rate_app_limited:1,  /* rate_{delivered,interval_us} limited? */
 		fastopen_connect:1, /* FASTOPEN_CONNECT sockopt */
 		fastopen_no_cookie:1, /* Allow send/recv SYN+data without a cookie */
+		// https://github.com/torvalds/linux/commit/d4761754b4fb2ef8d9a1e9d121c4bec84e1fe292
 		is_sack_reneg:1,    /* in recovery from loss with SACK reneg? */
 		unused:2;
+	// 是否启动nagle算法
 	u8	nonagle     : 4,/* Disable Nagle algorithm?             */
 		thin_lto    : 1,/* Use linear timeouts for thin streams */
 		unused1	    : 1,
@@ -251,7 +279,9 @@ struct tcp_sock {
 	u32	rtt_seq;	/* sequence number to update rttvar	*/
 	struct  minmax rtt_min;
 
+	// 从发送队列中发送出去但未确认的tcp seg数目，即 snd_nxt-snd.una
 	u32	packets_out;	/* Packets which are "in flight"	*/
+	// 重传还未得到确认的seg数
 	u32	retrans_out;	/* Retransmitted packets out		*/
 	u32	max_packets_out;  /* max packets_out in last window */
 	u32	max_packets_seq;  /* right edge of max_packets_out flight */

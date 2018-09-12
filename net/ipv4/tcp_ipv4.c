@@ -965,6 +965,7 @@ static void tcp_v4_reqsk_send_ack(const struct sock *sk, struct sk_buff *skb,
  *	This still operates on a request_sock only, not on a big
  *	socket.
  */
+// 服务端接收到sync以后，会调用该函数发送sync+ack
 static int tcp_v4_send_synack(const struct sock *sk, struct dst_entry *dst,
 			      struct flowi *fl,
 			      struct request_sock *req,
@@ -1569,6 +1570,7 @@ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 {
 	struct sock *rsk;
 
+	// 如果tcp连接已建立
 	if (sk->sk_state == TCP_ESTABLISHED) { /* Fast path */
 		struct dst_entry *dst = sk->sk_rx_dst;
 
@@ -1581,6 +1583,7 @@ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 				sk->sk_rx_dst = NULL;
 			}
 		}
+		// 处理已建立连接的tcp
 		tcp_rcv_established(sk, skb, tcp_hdr(skb));
 		return 0;
 	}
@@ -1588,13 +1591,14 @@ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 	if (tcp_checksum_complete(skb))
 		goto csum_err;
 
-	if (sk->sk_state == TCP_LISTEN) { //说明收到的是三次握手第一步SYN或者第三步ACK,这里是服务器端的情况
+	//处理收到的是三次握手第一步SYN或者第三步ACK,这里是服务器端的情况
+	if (sk->sk_state == TCP_LISTEN) { 
 		struct sock *nsk = tcp_v4_cookie_check(sk, skb);
 
 		if (!nsk) 
 			goto discard;
 		if (nsk != sk) { //如果是第一次握手的SYN，这里的nsk应该是'父'sk, 如果这里是三次握手的第三步ACK，则这里的nsk是‘子'sk
-			if (tcp_child_process(sk, nsk, skb)) { //这里面还是会调用tcp_rcv_state_process
+			if (tcp_child_process(sk, nsk, skb)) { //这里面还是会调用 tcp_rcv_state_process
 				rsk = nsk;
 				goto reset;
 			}
@@ -1611,6 +1615,7 @@ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 	return 0;
 
 reset:
+	// 发送tcp RST报文
 	tcp_v4_send_reset(rsk, skb);
 discard:
 	kfree_skb(skb);
@@ -1789,11 +1794,11 @@ lookup:
 		goto no_tcp_socket;
 
 process:
-	// 如果状态为TCP_TIME_WAIT，跳转到do_time_wait
+	// 如果状态为TCP_TIME_WAIT，跳转到do_time_wait，client端才有
 	if (sk->sk_state == TCP_TIME_WAIT)
 		goto do_time_wait;
 
-	// 处理三次握手中接收到syn报文后
+	// 处理三次握手中接收到syn报文后，server端才有
 	if (sk->sk_state == TCP_NEW_SYN_RECV) {
 		struct request_sock *req = inet_reqsk(sk);
 		bool req_stolen = false;
@@ -1846,6 +1851,7 @@ process:
 			return 0;
 		}
 	}
+	// ttl过期
 	if (unlikely(iph->ttl < inet_sk(sk)->min_ttl)) {
 		__NET_INC_STATS(net, LINUX_MIB_TCPMINTTLDROP);
 		goto discard_and_relse;
@@ -1867,7 +1873,9 @@ process:
 
 	skb->dev = NULL;
 
+	// 表示是server端
 	if (sk->sk_state == TCP_LISTEN) {
+		// 调用tcp_v4_do_rcv来处理报文
 		ret = tcp_v4_do_rcv(sk, skb);
 		goto put_and_return;
 	}
@@ -1877,9 +1885,10 @@ process:
 	bh_lock_sock_nested(sk);
 	tcp_segs_in(tcp_sk(sk), skb);
 	ret = 0;
-	if (!sock_owned_by_user(sk)) {
+	// http://blog.chinaunix.net/uid-27134408-id-4258537.html
+	if (!sock_owned_by_user(sk)) { // 当sock没有被用户进程占有的时候
 		ret = tcp_v4_do_rcv(sk, skb);
-	} else if (tcp_add_backlog(sk, skb)) {
+	} else if (tcp_add_backlog(sk, skb)) { // 当sock被用户进程占有时，将数据包保存到backlog中，然后返回
 		goto discard_and_relse;
 	}
 	bh_unlock_sock(sk);

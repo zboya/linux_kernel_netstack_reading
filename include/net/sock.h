@@ -357,6 +357,8 @@ struct sock {
 	atomic_t		sk_drops;
 	int			sk_rcvlowat;
 	struct sk_buff_head	sk_error_queue;
+	// sk_receive_queue是真正的接收队列，收到的TCP数据包经过检查和处理后，
+	// 就会保存到这个队列中，该队列中的数据在tcp中就是顺序且正确的。
 	struct sk_buff_head	sk_receive_queue;
 	/*
 	 * The backlog queue is special, it is always used with
