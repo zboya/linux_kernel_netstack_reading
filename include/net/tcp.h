@@ -1109,6 +1109,8 @@ static inline unsigned int tcp_left_out(const struct tcp_sock *tp)
  *	"Packets left network, but not honestly ACKed yet" PLUS
  *	"Packets fast retransmitted"
  */
+// 等价于 packets_out - sacked_out - lost_out + retrans_out 
+// 计算得到 正在网络管道中传输的tcp段数
 static inline unsigned int tcp_packets_in_flight(const struct tcp_sock *tp)
 {
 	return tp->packets_out - tcp_left_out(tp) + tp->retrans_out;
@@ -1605,6 +1607,9 @@ static inline struct sk_buff *tcp_write_queue_head(const struct sock *sk)
 	return skb_peek(&sk->sk_write_queue);
 }
 
+// 我们知道sock的发送队列sk_write_queue是一个双向链表,
+// 而用tcp_write_queue_tail则是取得链表的最后一个元素.
+// (如果链表为空则返回NULL).  
 static inline struct sk_buff *tcp_write_queue_tail(const struct sock *sk)
 {
 	return skb_peek_tail(&sk->sk_write_queue);
