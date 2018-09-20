@@ -1457,6 +1457,8 @@ static void sock_copy(struct sock *nsk, const struct sock *osk)
 #endif
 }
 
+// 根据协议的scok大小分配sock的内存大小
+// 比如协议为tcp， 那么prot->obj_size = sizeof(tcp_sock)
 static struct sock *sk_prot_alloc(struct proto *prot, gfp_t priority,
 		int family)
 {
@@ -1520,6 +1522,10 @@ static void sk_prot_free(struct proto *prot, struct sock *sk)
  *	@prot: struct proto associated with this new sock instance
  *	@kern: is this to be a kernel socket?
  */
+/*
+* 分配sock实例并初始化，如果是TCP协议，
+* 则实际分配的大小为sizeof(tcp_sock)。
+*/
 struct sock *sk_alloc(struct net *net, int family, gfp_t priority,
 		      struct proto *prot, int kern)
 {
@@ -2141,6 +2147,7 @@ int __sock_cmsg_send(struct sock *sk, struct msghdr *msg, struct cmsghdr *cmsg,
 }
 EXPORT_SYMBOL(__sock_cmsg_send);
 
+// 
 int sock_cmsg_send(struct sock *sk, struct msghdr *msg,
 		   struct sockcm_cookie *sockc)
 {

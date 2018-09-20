@@ -44,7 +44,21 @@ struct linger {
  *	system, not 4.3. Thus msg_accrights(len) are now missing. They
  *	belong in an obscure libc emulation or the bin.
  */
- 
+
+// struct msghdr  { 
+// 	// 协议地址和套接口信息，在非连接的UDP中，发送者要指定对方地址端口，
+// 	// 接受方用于的到数据来源，如果不需要的话可以设置为NULL
+// 	//（在TCP或者连接的UDP中，一般设置为NULL）
+//     void  * msg_name ;   /*  消息的协议地址  */ 
+//     socklen_t msg_namelen ;   /*  地址的长度  */ 
+//     struct iovec  * msg_iov ;   /*  多io缓冲区的地址  */ 
+//     int  msg_iovlen ;   /*  缓冲区的个数  */ 
+//     void  * msg_control ;   /*  辅助数据的地址  */ 
+//     socklen_t msg_controllen ;   /*  辅助数据的长度  */ 
+//     int  msg_flags ;   /*  接收消息的标识  */ 
+// };
+
+// 用户层和内核层交换的数据头，内核接收用户的数据时一般会构建msghdr来表示
 struct msghdr {
 	void		*msg_name;	/* ptr to socket address structure */
 	int		msg_namelen;	/* size of socket address structure */

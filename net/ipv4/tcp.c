@@ -1169,6 +1169,7 @@ void tcp_free_fastopen_req(struct tcp_sock *tp)
 	}
 }
 
+//  如果使用了TCP Fast Open，则会在发送SYN包的同时携带上数据。
 static int tcp_sendmsg_fastopen(struct sock *sk, struct msghdr *msg,
 				int *copied, size_t size)
 {
@@ -1215,6 +1216,9 @@ static int tcp_sendmsg_fastopen(struct sock *sk, struct msghdr *msg,
 }
 
 // 由tcp_sendmsg调用
+// tcp_sendmsg_locked 的主要工作是把用户层的数据，填充到skb中，然后加入到sock的发送队列。
+// 之后调用tcp_write_xmit()来把sock发送队列中的skb尽量地发送出去。
+// 另外TCP发送缓存的管理也主要发生在tcp_sendmsg_locked 函数中
 int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -1229,6 +1233,7 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 
 	flags = msg->msg_flags;
 
+	// 如果设置了MSG_ZEROCOPY，零拷贝
 	if (flags & MSG_ZEROCOPY && size) {
 		if (sk->sk_state != TCP_ESTABLISHED) {
 			err = -EINVAL;
@@ -1247,6 +1252,7 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 			uarg->zerocopy = 0;
 	}
 
+	// 如果设置了MSG_FASTOPEN，调用 tcp_sendmsg_fastopen
 	if (unlikely(flags & MSG_FASTOPEN || inet_sk(sk)->defer_connect) &&
 	    !tp->repair) {
 		err = tcp_sendmsg_fastopen(sk, msg, &copied_syn, size);
@@ -1264,6 +1270,7 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 	 * (passive side) where data is allowed to be sent before a connection
 	 * is fully established.
 	 */
+	// 如果connect还没有完成则等待连接完成(如是非阻塞则直接返回).  
 	if (((1 << sk->sk_state) & ~(TCPF_ESTABLISHED | TCPF_CLOSE_WAIT)) &&
 	    !tcp_passive_fastopen(sk)) {
 		err = sk_stream_wait_connect(sk, &timeo);
@@ -1303,6 +1310,7 @@ restart:
 	mss_now = tcp_send_mss(sk, &size_goal, flags);
 
 	err = -EPIPE;
+	// 如果发送端已经完全关闭则返回,并设置errno.  
 	if (sk->sk_err || (sk->sk_shutdown & SEND_SHUTDOWN))
 		goto do_error;
 
@@ -1490,6 +1498,7 @@ int tcp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 {
 	int ret;
 
+	// 给整个发送消息过程加锁
 	lock_sock(sk);
 	ret = tcp_sendmsg_locked(sk, msg, size);
 	release_sock(sk);

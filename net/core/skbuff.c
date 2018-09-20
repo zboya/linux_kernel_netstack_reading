@@ -975,6 +975,7 @@ static inline struct sk_buff *skb_from_uarg(struct ubuf_info *uarg)
 	return container_of((void *)uarg, struct sk_buff, cb);
 }
 
+// https://www.spinics.net/lists/netdev/msg340199.html
 struct ubuf_info *sock_zerocopy_realloc(struct sock *sk, size_t size,
 					struct ubuf_info *uarg)
 {

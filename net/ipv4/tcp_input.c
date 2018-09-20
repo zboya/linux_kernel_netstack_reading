@@ -3526,6 +3526,8 @@ static void tcp_xmit_recovery(struct sock *sk, int rexmit)
 // （3）收到数据时；这时通告窗口可能会变小，发送ACK会告知对端更新窗口，并释放已经接收的数据
 // （4）发送数据段时
 // （5）收到带SYN、FIN标记的包时
+// 
+// http://lib.csdn.net/article/operatingsystem/26582
 static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);

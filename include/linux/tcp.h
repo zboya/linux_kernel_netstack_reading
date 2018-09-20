@@ -146,6 +146,7 @@ static inline struct tcp_request_sock *tcp_rsk(const struct request_sock *req)
 
 // tcp_sock是tcp协议控制块，它在inet_connection_sock基础上扩展
 // 了滑动窗口，拥塞控制等tcp专有的一些属性
+// http://lib.csdn.net/article/operatingsystem/26582
 struct tcp_sock {
 	/* inet_connection_sock has to be the first member of tcp_sock */
 	struct inet_connection_sock	inet_conn;
@@ -183,6 +184,7 @@ struct tcp_sock {
 				 */
 	// 下次期望接收的序列号
  	u32	rcv_nxt;	/* What we want to receive next 	*/
+	//  尚未从内核复制到用户空间的段最前面一个字节的序号
 	u32	copied_seq;	/* Head of yet unread data		*/
 	// 标识最早接收但未确认的段的序号，即当前接收窗口的左端
 	// 在发送ack时，由rcv_nxt更新，因此rcv_wup更新常比rcv_nxt滞后
@@ -272,9 +274,13 @@ struct tcp_sock {
 
 /* RTT measurement */
 	u64	tcp_mstamp;	/* most recent packet received/sent */
+	// 平滑rtt，单位us
 	u32	srtt_us;	/* smoothed round trip time << 3 in usecs */
+	// rtt的平均偏差
 	u32	mdev_us;	/* medium deviation			*/
+	// rtt的平均偏差的最大值
 	u32	mdev_max_us;	/* maximal mdev for the last rtt period	*/
+	// 平滑rtt的平均偏差，用来计算rto
 	u32	rttvar_us;	/* smoothed mdev_max			*/
 	u32	rtt_seq;	/* sequence number to update rttvar	*/
 	struct  minmax rtt_min;
@@ -300,9 +306,13 @@ struct tcp_sock {
 /*
  *	Slow start and congestion control (see also Nagle, and Karn & Partridge)
  */
+	// 慢启动阀值
  	u32	snd_ssthresh;	/* Slow start size threshold		*/
+	//  当前拥塞窗口大小
  	u32	snd_cwnd;	/* Sending congestion window		*/
+	//  自上次调整拥塞窗口到目前为止接收到的总ack个数
 	u32	snd_cwnd_cnt;	/* Linear increase counter		*/
+	// 允许的最大拥塞窗口值
 	u32	snd_cwnd_clamp; /* Do not allow snd_cwnd to grow above this */
 	u32	snd_cwnd_used;
 	u32	snd_cwnd_stamp;
@@ -318,9 +328,13 @@ struct tcp_sock {
 	u32	rate_delivered;    /* saved rate sample: packets delivered */
 	u32	rate_interval_us;  /* saved rate sample: time elapsed */
 
+	// 当前接收窗口的大小
  	u32	rcv_wnd;	/* Current receiver window		*/
+	//  已加入发送队列中的最后一个字节序号
 	u32	write_seq;	/* Tail(+1) of data held in tcp send buffer */
-	u32	notsent_lowat;	/* TCP_NOTSENT_LOWAT */
+	u32	notsent_lowat;	/* TCP_NOTSENT_LOWAT */ 
+	// 通常情况表示已经真正发送出去的最后一个字节序号，但有时
+	// 也表示期望发送出去的最后一个字节序号，如启用nagle算法后或者在发送持续探测段后。
 	u32	pushed_seq;	/* Last pushed seq, required to talk to windows */
 	u32	lost_out;	/* Lost packets			*/
 	u32	sacked_out;	/* SACK'd packets			*/
@@ -436,6 +450,9 @@ enum tsq_flags {
 	TCPF_MTU_REDUCED_DEFERRED	= (1UL << TCP_MTU_REDUCED_DEFERRED),
 };
 
+// https://stackoverflow.com/questions/38201991/how-is-one-structure-mapped-to-another-by-something-like-return-struct-a-b
+// 将sock强制转为tcp_sk， 这是安全的，因为tcp协议再分配sock的时候调用 sk_prot_alloc
+// 指定了sock内存大小就是为 size of tcp_sock
 static inline struct tcp_sock *tcp_sk(const struct sock *sk)
 {
 	return (struct tcp_sock *)sk;
