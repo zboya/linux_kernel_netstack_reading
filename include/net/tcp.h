@@ -731,6 +731,7 @@ static inline u32 tcp_time_stamp_raw(void)
 /* Refresh 1us clock of a TCP socket,
  * ensuring monotically increasing values.
  */
+// 更改tp->tcp_mstamp为当前时间的us表示
 static inline void tcp_mstamp_refresh(struct tcp_sock *tp)
 {
 	u64 val = tcp_clock_us();
@@ -1618,6 +1619,7 @@ static inline struct sk_buff *tcp_write_queue_tail(const struct sock *sk)
 #define tcp_for_write_queue_from_safe(skb, tmp, sk)			\
 	skb_queue_walk_from_safe(&(sk)->sk_write_queue, skb, tmp)
 
+// 从发送队列中拿到第一个skb
 static inline struct sk_buff *tcp_send_head(const struct sock *sk)
 {
 	return skb_peek(&sk->sk_write_queue);

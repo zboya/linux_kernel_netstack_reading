@@ -903,6 +903,11 @@ ssize_t tcp_splice_read(struct socket *sock, loff_t *ppos,
 }
 EXPORT_SYMBOL(tcp_splice_read);
 
+/* 申请一个skb，其线性数据区的大小为：
+* 通过select_size()得到的线性数据区中TCP负荷的大小 + 最大的协议头长度。
+* 如果申请skb失败了，或者虽然申请skb成功，但是从系统层面判断此次申请不合法，
+* 那么就进入睡眠，等待内存。
+*/
 struct sk_buff *sk_stream_alloc_skb(struct sock *sk, int size, gfp_t gfp,
 				    bool force_schedule)
 {
@@ -1314,6 +1319,7 @@ restart:
 	if (sk->sk_err || (sk->sk_shutdown & SEND_SHUTDOWN))
 		goto do_error;
 
+	// 得到msg的剩余长度
 	while (msg_data_left(msg)) {
 		int copy = 0;
 
@@ -1338,6 +1344,8 @@ new_segment:
 			}
 			first_skb = tcp_rtx_and_write_queues_empty(sk);
 			linear = select_size(first_skb, zc);
+			// 申请发送缓存
+			// alloc的大小一般都是等于mss的大小,这里是通过select_size得到的.  
 			skb = sk_stream_alloc_skb(sk, linear, sk->sk_allocation,
 						  first_skb);
 			if (!skb)
@@ -1346,6 +1354,7 @@ new_segment:
 			process_backlog = true;
 			skb->ip_summed = CHECKSUM_PARTIAL;
 
+			// 将这个skb加入到sk_write_queue队列中,并更新sk_send_head域.  
 			skb_entail(sk, skb);
 			copy = size_goal;
 
@@ -1365,6 +1374,7 @@ new_segment:
 		if (skb_availroom(skb) > 0 && !zc) {
 			/* We have some space in skb head. Superb! */
 			copy = min_t(int, copy, skb_availroom(skb));
+			// 将数据写入skb中
 			err = skb_add_data_nocache(sk, skb, &msg->msg_iter, copy);
 			if (err)
 				goto do_fault;
@@ -1379,6 +1389,7 @@ new_segment:
 			if (!skb_can_coalesce(skb, i, pfrag->page,
 					      pfrag->offset)) {
 				if (i >= sysctl_max_skb_frags) {
+					// 给TCP加一个PSH标记
 					tcp_mark_push(tp, skb);
 					goto new_segment;
 				}
@@ -1436,8 +1447,10 @@ new_segment:
 
 		if (forced_push(tp)) {
 			tcp_mark_push(tp, skb);
+			// 把sk发送队列中所有的skb全部发送出去        
 			__tcp_push_pending_frames(sk, mss_now, TCP_NAGLE_PUSH);
-		} else if (skb == tcp_send_head(sk))
+		} else if (skb == tcp_send_head(sk)) // 发送队列不为空
+			// 只发送一个skb
 			tcp_push_one(sk, mss_now);
 		continue;
 

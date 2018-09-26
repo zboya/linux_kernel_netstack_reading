@@ -1317,6 +1317,7 @@ EXPORT_SYMBOL_GPL(hrtimer_init);
  *
  * It is important for this function to not return a false negative.
  */
+// 获取定时器的当前状态
 bool hrtimer_active(const struct hrtimer *timer)
 {
 	struct hrtimer_clock_base *base;
