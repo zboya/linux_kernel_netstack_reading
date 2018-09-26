@@ -1817,6 +1817,7 @@ static u32 tcp_tso_autosize(const struct sock *sk, unsigned int mss_now,
 /* Return the number of segments we want in the skb we are transmitting.
  * See if congestion control module wants to decide; otherwise, autosize.
  */
+// 计算得到预期发送的seg数量
 static u32 tcp_tso_segs(struct sock *sk, unsigned int mss_now)
 {
 	const struct tcp_congestion_ops *ca_ops = inet_csk(sk)->icsk_ca_ops;
@@ -2169,6 +2170,14 @@ static bool tcp_can_coalesce_send_queue_head(struct sock *sk, int len)
  *         1 if a probe was sent,
  *         -1 otherwise
  */
+// TCP 路径 MTU 发现的实现使用连接本身的 TCP 信息包，而不是 ICMP ECHO 消息。TCP/IP 内核扩展保留一个名为 PMTU 的表，
+// 以存储相关的 PMTU 发现信息。当与每个目标建立 TCP 连接时，在 PMTU 表中将创建该目标的条目。PMTU 值就是流出的接口 MTU 值。
+// TCP 信息包在发送时 IP 报头中带有 Don't Fragment 或者 DF 位设置。如果 TCP 信息包到达一个网络路由器，
+// 且该路由器的 MTU 值小于 TCP 信息包的大小，那么路由器将发送回一条 ICMP 错误消息，指出无法转发消息，
+// 因为消息无法分段。如果发送错误消息的路由器符合 RFC 1191，那么网络的 MTU 值就包含在 ICMP 错误消息中。
+// 否则，对于要重新发送的 TCP 信息包，必须从 AIX TCP/IP 内核扩展中的已知 MTU 值表中分配一个较小的 MTU 大小值。
+// 然后 PMTU 表中的目标 PMTU 值将更新为新的较小的 MTU 大小，然后重新发送 TCP 信息包。到该目标的任何后续 TCP 连接都将使用更新的 PMTU 值。
+// https://blog.csdn.net/u011130578/article/details/44629265
 static int tcp_mtu_probe(struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
@@ -2307,6 +2316,9 @@ static int tcp_mtu_probe(struct sock *sk)
 	return -1;
 }
 
+// 检查pacing是否需要等待再发送
+// 1. 开启了tcp pacing
+// 2. pacing_timer定时器的当前正在运行
 static bool tcp_pacing_check(const struct sock *sk)
 {
 	return tcp_needs_internal_pacing(sk) &&
@@ -2423,7 +2435,8 @@ void tcp_chrono_stop(struct sock *sk, const enum tcp_chrono type)
  * 参数说明如下:
  * mss_now:当前有效的MSS
  * nonagle: 标识是否启用nonagle算法。
- */ //最终调用tcp_transmit_skb   由push_one表示是发送队列上的一个SKB还是把全部SKB一起发送出去
+ */ 
+// 最终调用tcp_transmit_skb   
 static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 			   int push_one, gfp_t gfp)
 {
@@ -2437,9 +2450,11 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 
 	sent_pkts = 0;
 
+	// 更改tp->tcp_mstamp为当前时间的us表示
 	tcp_mstamp_refresh(tp);
 	if (!push_one) {
 		/* Do MTU probing. */
+		// 探测pmtu
 		result = tcp_mtu_probe(sk);
 		if (!result) {
 			return false;
@@ -2448,6 +2463,7 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		}
 	}
 
+	// 预计发送的最大seg数
 	max_segs = tcp_tso_segs(sk, mss_now);
 	/*
 	 * 如果发送队列不为空，则准备开始发送段。
@@ -2455,6 +2471,8 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 	while ((skb = tcp_send_head(sk))) {
 		unsigned int limit;
 
+		// 如果开启了pacing发送，
+		// 检查是否应该发送
 		if (tcp_pacing_check(sk))
 			break;
 
@@ -2476,9 +2494,9 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		/* 
 		* 检查目前是否可以发送数据,
 		* 确认当前发送窗口的大小。
-		 * 检测拥塞窗口的大小，如果为0，则说明
-		 * 拥塞窗口已满，目前不能发送。
-		 */
+		* 检测拥塞窗口的大小，如果为0，则说明
+		* 拥塞窗口已满，目前不能发送。
+		*/
 		cwnd_quota = tcp_cwnd_test(tp, skb);
 		if (!cwnd_quota) {
 			if (push_one == 2)
@@ -2509,7 +2527,7 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		} else {
 			/*
 			 * 如果需要TSO分段，则检测该段是否应该延时发送，
-			 * 如果是则目前不能发送。tcp_tso_should_defer()用来检测
+			 * 如果是则目前不能发送。 tcp_tso_should_defer()用来检测
 			 * GSO段是否需要延时发送。在段中有FIN标志，或者
 			 * 不处于Open拥塞状态，或者TSO段延时超过2个时钟
 			 * 滴答，或者拥塞窗口和发送窗口的最小值大于64KB
@@ -2756,8 +2774,8 @@ rearm_timer:
  * TCP_CORK or attempt at coalescing tiny packets.
  * The socket must be locked by the caller.
  */
- //把sk发送队列中所有的skb全部发送出去        
-//  只发送队列上的第一个SKB采用tcp_push_one 最终都要调用tcp_write_xmit
+// 把sk发送队列中所有的skb全部发送出去        
+// 只发送队列上的第一个SKB采用tcp_push_one 最终都要调用tcp_write_xmit
 void __tcp_push_pending_frames(struct sock *sk, unsigned int cur_mss,
 			       int nonagle)
 {
@@ -2779,7 +2797,6 @@ void __tcp_push_pending_frames(struct sock *sk, unsigned int cur_mss,
 /*
  * tcp_push_one()用来输出发送队列上的第一个SKB，参数mss_now为当前MSS。
  */
- //发送队列上所有的SKB使用__tcp_push_pending_frames   最终都要调用tcp_write_xmit
 void tcp_push_one(struct sock *sk, unsigned int mss_now)
 {
 	struct sk_buff *skb = tcp_send_head(sk);
