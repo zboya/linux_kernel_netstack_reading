@@ -699,6 +699,9 @@ static inline bool forced_push(const struct tcp_sock *tp)
 	return after(tp->write_seq, tp->pushed_seq + (tp->max_window >> 1));
 }
 
+/* 更新skb的TCP控制块字段，把skb加入到sock发送队列的尾部，
+* 增加发送队列的大小，减小预分配缓存的大小。
+*/
 static void skb_entail(struct sock *sk, struct sk_buff *skb)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -1224,6 +1227,8 @@ static int tcp_sendmsg_fastopen(struct sock *sk, struct msghdr *msg,
 // tcp_sendmsg_locked 的主要工作是把用户层的数据，填充到skb中，然后加入到sock的发送队列。
 // 之后调用tcp_write_xmit()来把sock发送队列中的skb尽量地发送出去。
 // 另外TCP发送缓存的管理也主要发生在tcp_sendmsg_locked 函数中
+// https://blog.csdn.net/zhangskd/article/details/48207553
+// https://blog.csdn.net/noma_hwang/article/details/53743775
 int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -1239,6 +1244,7 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 	flags = msg->msg_flags;
 
 	// 如果设置了MSG_ZEROCOPY，零拷贝
+	// https://www.mail-archive.com/netdev@vger.kernel.org/msg180836.html
 	if (flags & MSG_ZEROCOPY && size) {
 		if (sk->sk_state != TCP_ESTABLISHED) {
 			err = -EINVAL;
@@ -1309,9 +1315,12 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 	sk_clear_bit(SOCKWQ_ASYNC_NOSPACE, sk);
 
 	/* Ok commence sending. */
+	//  已拷贝到发送队列的字节数 
 	copied = 0;
 
 restart:
+	// 获取当前的MSS、网络设备支持的最大数据长度size_goal。
+    // 如果支持GSO，size_goal会是MSS的整数倍。
 	mss_now = tcp_send_mss(sk, &size_goal, flags);
 
 	err = -EPIPE;
@@ -1319,14 +1328,16 @@ restart:
 	if (sk->sk_err || (sk->sk_shutdown & SEND_SHUTDOWN))
 		goto do_error;
 
-	// 得到msg的剩余长度
+	// 遍历用户层的数据块数组
 	while (msg_data_left(msg)) {
 		int copy = 0;
 
+		// 发送队列的最后一个skb
 		skb = tcp_write_queue_tail(sk);
 		if (skb)
 			copy = size_goal - skb->len;
 
+		// 需要使用新的skb来装数据
 		if (copy <= 0 || !tcp_skb_can_collapse_to(skb)) {
 			bool first_skb;
 			int linear;
@@ -1335,6 +1346,9 @@ new_segment:
 			/* Allocate new segment. If the interface is SG,
 			 * allocate skb fitting to single page.
 			 */
+			/* 如果发送队列的总大小sk_wmem_queued大于等于发送缓存的上限sk_sndbuf，
+			* 或者发送缓存中尚未发送的数据量超过了用户的设置值，就进入等待。
+			*/
 			if (!sk_stream_memory_free(sk))
 				goto wait_for_sndbuf;
 
@@ -1362,23 +1376,26 @@ new_segment:
 			 * already been sent. skb_mstamp isn't set to
 			 * avoid wrong rtt estimation.
 			 */
+			// 如果使用了TCP REPAIR选项，那么为skb设置“发送时间”
 			if (tp->repair)
 				TCP_SKB_CB(skb)->sacked |= TCPCB_REPAIRED;
 		}
 
 		/* Try to append data to the end of skb. */
+		// 本次拷贝的数据长度不能超过数据块的长度
 		if (copy > msg_data_left(msg))
 			copy = msg_data_left(msg);
 
 		/* Where to copy to? */
+		// 如果skb的线性数据区还有剩余空间 且 不是零拷贝，就先复制到线性数据区。
 		if (skb_availroom(skb) > 0 && !zc) {
 			/* We have some space in skb head. Superb! */
 			copy = min_t(int, copy, skb_availroom(skb));
-			// 将数据写入skb中
+			/* 拷贝用户空间的数据到内核空间，同时计算校验和 */
 			err = skb_add_data_nocache(sk, skb, &msg->msg_iter, copy);
 			if (err)
 				goto do_fault;
-		} else if (!zc) {
+		} else if (!zc) { /* 如果skb的线性数据区已经用完了 且 不是零拷贝，那么就使用分页区 */
 			bool merge = true;
 			int i = skb_shinfo(skb)->nr_frags;
 			struct page_frag *pfrag = sk_page_frag(sk);
@@ -1417,7 +1434,7 @@ new_segment:
 				page_ref_inc(pfrag->page);
 			}
 			pfrag->offset += copy;
-		} else {
+		} else { /*使用零拷贝*/
 			err = skb_zerocopy_iter_stream(sk, skb, msg, copy, uarg);
 			if (err == -EMSGSIZE || err == -EEXIST) {
 				tcp_mark_push(tp, skb);
@@ -1428,20 +1445,28 @@ new_segment:
 			copy = err;
 		}
 
+		// 如果这是第一次拷贝，取消PSH标志
 		if (!copied)
 			TCP_SKB_CB(skb)->tcp_flags &= ~TCPHDR_PSH;
 
+		// 更新发送队列的最后一个序号
 		tp->write_seq += copy;
+		// 更新skb的结束序号
 		TCP_SKB_CB(skb)->end_seq += copy;
 		tcp_skb_pcount_set(skb, 0);
 
+		// 已经拷贝到发送队列的数据量
 		copied += copy;
+		// 如果所有数据都拷贝好了，就退出
 		if (!msg_data_left(msg)) {
 			if (unlikely(flags & MSG_EOR))
 				TCP_SKB_CB(skb)->eor = 1;
 			goto out;
 		}
 
+		/* 如果skb还可以继续填充数据，或者发送的是带外数据，或者使用TCP REPAIR选项，
+		* 那么继续拷贝数据，先不发送。
+		*/
 		if (skb->len < size_goal || (flags & MSG_OOB) || unlikely(tp->repair))
 			continue;
 
@@ -1469,6 +1494,7 @@ wait_for_memory:
 	}
 
 out:
+	// 如果已经有数据复制到发送队列了，就尝试立即发送
 	if (copied) {
 		tcp_tx_timestamp(sk, sockc.tsflags);
 		tcp_push(sk, flags, mss_now, tp->nonagle, size_goal);

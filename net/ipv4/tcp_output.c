@@ -58,6 +58,7 @@ static void tcp_event_new_data_sent(struct sock *sk, struct sk_buff *skb)
 	tp->snd_nxt = TCP_SKB_CB(skb)->end_seq;
 
 	__skb_unlink(skb, &sk->sk_write_queue);
+	// https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=75c119afe14f74b4dd967d75ed9f57ab6c0ef045
 	tcp_rbtree_insert(&sk->tcp_rtx_queue, skb);
 
 	tp->packets_out += tcp_skb_pcount(skb);
@@ -2546,7 +2547,7 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		 * 段包括两种:一种是普通的用MSS分段的段，另一种则是
 		 * TSO分段的段。能否发送段主要取决于两个条件:一是段
 		 * 需完全在发送窗口中，二是拥塞窗口未满。第一种段，
-		 * 应该不会再分段了，因为在tcp_sendmsg()中创建段的SKB时已经
+		 * 应该不会再分段了，因为在 tcp_sendmsg() 中创建段的SKB时已经
 		 * 根据MSS处理了。而第二种段，则一般情况下都会大于MSS，
 		 * 因此通过TSO分段的段有可能大于拥塞窗口剩余空间，如果
 		 * 是这样，就需以发送窗口和拥塞窗口的最小值作为段长对
@@ -3198,6 +3199,9 @@ int __tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb, int segs)
 	return err;
 }
 
+// 超时重传是最基本的机制，在发送每个包时，都会开启一个超时定时器，
+// 同时放入重传队列，如果定时器超时仍然没收到ack消息，那么就会进行重传
+// ，重传的次数可以限制；如果在定时器超时前收到了ack消息，就把数据包从重传队列中删除。
 // tcp重传一个skb，最终调用__tcp_retransmit_skb实现
 int tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb, int segs)
 {
