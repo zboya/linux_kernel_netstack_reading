@@ -58,6 +58,7 @@ static void tcp_event_new_data_sent(struct sock *sk, struct sk_buff *skb)
 	tp->snd_nxt = TCP_SKB_CB(skb)->end_seq;
 
 	__skb_unlink(skb, &sk->sk_write_queue);
+	// https://blog.csdn.net/dog250/article/details/79048407
 	// https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=75c119afe14f74b4dd967d75ed9f57ab6c0ef045
 	tcp_rbtree_insert(&sk->tcp_rtx_queue, skb);
 

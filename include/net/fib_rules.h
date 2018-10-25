@@ -16,6 +16,12 @@ struct fib_kuid_range {
 	kuid_t end;
 };
 
+// fib_rules即是策略表，它是一个fib_rule结构
+// 这个策略表实际上就是一个单链表，整个单链表按策略的优先级由高到低的顺序排列，表头指针即是fib_rule。每个策略是一个fib_rule结构。这个结构有几个重要的域：
+// r_preference 这个策略的优先级。
+// r_table 这个策略对应的路由表，它是路由表索引表fib_tables的一个索引值。
+// r_action 策略的动作，如单播，丢弃，NAT等。
+// r_src,r_srcmask,r_dst,r_dstmask,r_tos等策略的选择器，即描述什么样的IP包匹配这条策略
 struct fib_rule {
 	struct list_head	list;
 	int			iifindex;

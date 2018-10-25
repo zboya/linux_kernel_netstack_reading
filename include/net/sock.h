@@ -148,6 +148,7 @@ typedef __u64 __bitwise __addrpair;
  *	This is the minimal network layer representation of sockets, the header
  *	for struct sock and struct inet_timewait_sock.
  */
+// 传输控制块的最小集合
 struct sock_common {
 	/* skc_daddr and skc_rcv_saddr must be grouped on a 8 bytes aligned
 	 * address on 64bit arches : cf INET_MATCH()
@@ -316,6 +317,9 @@ struct sock_common {
   *	@sk_reuseport_cb: reuseport group container
   *	@sk_rcu: used during RCU grace period
   */
+
+ // 结构比较通用的网络层描述，构成传输控制块的基础，与具体的协议无关
+ // 它描述了各个协议族传输层协议的公共信息，别的结构使用sock并对其扩展
 struct sock {
 	/*
 	 * Now struct inet_timewait_sock also uses sock_common, so please just
@@ -1025,6 +1029,9 @@ static inline void sk_prot_clear_nulls(struct sock *sk, int size)
 /* Networking protocol blocks we attach to sockets.
  * socket layer -> transport layer interface
  */
+// 网络接口层，结构中的操作实现从传输层到网络层的跳转
+// 在传输层对应的proto实例，通过proto_register()注册到proto_list上
+// 系统根据proto_list可以查看所有支持的传输协议 cat /proc/net/protocols
 struct proto {
 	void			(*close)(struct sock *sk,
 					long timeout);
@@ -2101,6 +2108,7 @@ static inline void sk_clear_bit(int nr, struct sock *sk)
 	clear_bit(nr, &sk->sk_wq_raw->flags);
 }
 
+// 将SIGIO或SIGURG信号发送到该套接口的进程，通知该进程可以对io的读写了
 static inline void sk_wake_async(const struct sock *sk, int how, int band)
 {
 	if (sock_flag(sk, SOCK_FASYNC)) {
