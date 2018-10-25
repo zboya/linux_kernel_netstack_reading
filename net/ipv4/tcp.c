@@ -446,6 +446,7 @@ static u64 tcp_compute_delivery_rate(const struct tcp_sock *tp)
  * NOTE: A lot of things set to zero explicitly by call to
  *       sk_alloc() so need not be done here.
  */
+// 由 tcp_v4_init_sock 调用，对tcp sock的初始化
 void tcp_init_sock(struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);

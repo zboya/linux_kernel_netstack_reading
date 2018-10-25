@@ -34,6 +34,7 @@ struct inet_bind_bucket;
  * problems of sockets in such a state on heavily loaded servers, but
  * without violating the protocol specification.
  */
+// 支持面向链接的tcp time wait状态的描述，是构成tcp_timewait_sock的基础
 struct inet_timewait_sock {
 	/*
 	 * Now struct sock also uses sock_common, so please just

@@ -1373,13 +1373,18 @@ static struct pernet_operations fib_net_ops = {
 
 void __init ip_fib_init(void)
 {
+	// fn_alias_kmem trie_leaf_kmem 分配缓存
 	fib_trie_init();
 
+	/*注册协议栈子系统，也就是路由系统。 重点--fib_net_ops*/
 	register_pernet_subsys(&fib_net_ops);
 
+	// /*register a network notifier block，主要是设备状态改变*/
 	register_netdevice_notifier(&fib_netdev_notifier);
+	 /*修改设备的配置--IP地址*/
 	register_inetaddr_notifier(&fib_inetaddr_notifier);
 
+	// 路由netlink的函数注册
 	rtnl_register(PF_INET, RTM_NEWROUTE, inet_rtm_newroute, NULL, 0);
 	rtnl_register(PF_INET, RTM_DELROUTE, inet_rtm_delroute, NULL, 0);
 	rtnl_register(PF_INET, RTM_GETROUTE, NULL, inet_dump_fib, 0);
