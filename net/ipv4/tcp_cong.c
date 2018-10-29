@@ -153,6 +153,7 @@ char *tcp_ca_get_name_by_key(u32 key, char *buffer)
 EXPORT_SYMBOL_GPL(tcp_ca_get_name_by_key);
 
 /* Assign choice of congestion control. */
+// 指定tcp 拥塞控制的方法
 void tcp_assign_congestion_control(struct sock *sk)
 {
 	struct net *net = sock_net(sk);
@@ -160,13 +161,17 @@ void tcp_assign_congestion_control(struct sock *sk)
 	const struct tcp_congestion_ops *ca;
 
 	rcu_read_lock();
+	// 获取ca方法
 	ca = rcu_dereference(net->ipv4.tcp_congestion_control);
 	if (unlikely(!try_module_get(ca->owner)))
+		// 获取不到，默认使用tcp_reno算法
 		ca = &tcp_reno;
+	// 将ca复制给icsk_ca_ops
 	icsk->icsk_ca_ops = ca;
 	rcu_read_unlock();
 
 	memset(icsk->icsk_ca_priv, 0, sizeof(icsk->icsk_ca_priv));
+	// 是否需要配置ECN
 	if (ca->flags & TCP_CONG_NEEDS_ECN)
 		INET_ECN_xmit(sk);
 	else

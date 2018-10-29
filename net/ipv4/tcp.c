@@ -452,9 +452,12 @@ void tcp_init_sock(struct sock *sk)
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
 
+	// 下面两个队列使用红黑树 
 	tp->out_of_order_queue = RB_ROOT;
 	sk->tcp_rtx_queue = RB_ROOT;
+	// 定时器初始化
 	tcp_init_xmit_timers(sk);
+
 	INIT_LIST_HEAD(&tp->tsq_node);
 	INIT_LIST_HEAD(&tp->tsorted_sent_queue);
 
@@ -467,9 +470,12 @@ void tcp_init_sock(struct sock *sk)
 	 * algorithms that we must have the following bandaid to talk
 	 * efficiently to them.  -DaveM
 	 */
+	// 初始化 sndwnd = 10
 	tp->snd_cwnd = TCP_INIT_CWND;
 
 	/* There's a bubble in the pipe until at least the first ACK. */
+	// app_limited=fffffff
+	// 管道中有一个泡沫，直到至少第一个ACK
 	tp->app_limited = ~0U;
 
 	/* See draft-stevens-tcpca-spec-01 for discussion of the
@@ -477,9 +483,11 @@ void tcp_init_sock(struct sock *sk)
 	 */
 	tp->snd_ssthresh = TCP_INFINITE_SSTHRESH;
 	tp->snd_cwnd_clamp = ~0;
+	// 默认536
 	tp->mss_cache = TCP_MSS_DEFAULT;
 
 	tp->reordering = sock_net(sk)->ipv4.sysctl_tcp_reordering;
+	// 分配拥塞算法
 	tcp_assign_congestion_control(sk);
 
 	tp->tsoffset = 0;
@@ -495,6 +503,7 @@ void tcp_init_sock(struct sock *sk)
 	sk->sk_sndbuf = sock_net(sk)->ipv4.sysctl_tcp_wmem[1];
 	sk->sk_rcvbuf = sock_net(sk)->ipv4.sysctl_tcp_rmem[1];
 
+	// socket数量累增
 	sk_sockets_allocated_inc(sk);
 	sk->sk_route_forced_caps = NETIF_F_GSO;
 }
@@ -1275,7 +1284,7 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 	}
 	// 取得发送超时时间
 	timeo = sock_sndtimeo(sk, flags & MSG_DONTWAIT);
-
+	// 标记套接字是否有应用程序限制
 	tcp_rate_check_app_limited(sk);  /* is sending application-limited? */
 
 	/* Wait for a connection to finish. One exception is TCP Fast Open
@@ -1290,6 +1299,7 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 			goto do_error;
 	}
 
+	// https://blog.csdn.net/u011130578/article/details/44888979
 	if (unlikely(tp->repair)) {
 		if (tp->repair_queue == TCP_RECV_QUEUE) {
 			copied = tcp_send_rcvq(sk, msg, size);

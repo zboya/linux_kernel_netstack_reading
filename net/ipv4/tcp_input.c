@@ -3291,6 +3291,10 @@ static void tcp_cong_control(struct sock *sk, u32 ack, u32 acked_sacked,
 /* Check that window update is acceptable.
  * The function assumes that snd_una<=ack<=snd_next.
  */
+// 以下几种情况认为需要update：
+// ack号比最小未确认序列号大  
+// ack报文的序列号比之前的大
+// ack报文序列号等于上次的序列号，但对端窗口比现在的大
 static inline bool tcp_may_update_window(const struct tcp_sock *tp,
 					const u32 ack, const u32 ack_seq,
 					const u32 nwin)
@@ -3325,6 +3329,7 @@ static void tcp_rcv_nxt_update(struct tcp_sock *tp, u32 seq)
  * Window update algorithm, described in RFC793/RFC1122 (used in linux-2.2
  * and in FreeBSD. NetBSD's one is even worse.) is wrong.
  */
+// RFC793/RFC1122描述的更新窗口算法
 static int tcp_ack_update_window(struct sock *sk, const struct sk_buff *skb, u32 ack,
 				 u32 ack_seq)
 {
@@ -3332,13 +3337,17 @@ static int tcp_ack_update_window(struct sock *sk, const struct sk_buff *skb, u32
 	int flag = 0;
 	u32 nwin = ntohs(tcp_hdr(skb)->window);
 
+	// 如果是syn报文,根据snd_wscale和wnd的值计算出nwin，即为对端的接受窗口
 	if (likely(!tcp_hdr(skb)->syn))
 		nwin <<= tp->rx_opt.snd_wscale;
 
+	// 调用tcp_may_update_window，是否需要更新wnd
 	if (tcp_may_update_window(tp, ack, ack_seq, nwin)) {
+		// 标记窗口更新
 		flag |= FLAG_WIN_UPDATE;
 		tcp_update_wl(tp, ack_seq);
 
+		// 如果发送窗口和现在计算的不一样，则发送
 		if (tp->snd_wnd != nwin) {
 			tp->snd_wnd = nwin;
 
@@ -3533,15 +3542,22 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct tcp_sacktag_state sack_state;
+	// 初始化rate_sample，bbr算法需要该结构
 	struct rate_sample rs = { .prior_delivered = 0 };
 	// snd_una为最小发送未确认的序号
 	u32 prior_snd_una = tp->snd_una;
 	bool is_sack_reneg = tp->is_sack_reneg;
+	// 报文序列号，客户端自己的序列号
 	u32 ack_seq = TCP_SKB_CB(skb)->seq;
+	// ack的序列号，对端的序列号
 	u32 ack = TCP_SKB_CB(skb)->ack_seq;
+	// 是否重复ack
 	bool is_dupack = false;
+	// 记录当前in flignt的包数
 	int prior_packets = tp->packets_out;
+	// 当前发送的所有包数
 	u32 delivered = tp->delivered;
+	// 当前已丢失的所有包数
 	u32 lost = tp->lost;
 	int rexmit = REXMIT_NONE; /* Flag to (re)transmit to recover losses */
 	u32 prior_fack;
@@ -3612,10 +3628,13 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 		 * 添加FLAG_WIN_UPDATE标记,同时通知拥塞控制算法模块
 		 * 本次ACK是快速路径,如有必要,就作相应的处理
 		 */
+		// 更新扩大窗口
 		tcp_update_wl(tp, ack_seq);
+		// 更新una
 		tcp_snd_una_update(tp, ack);
 		flag |= FLAG_WIN_UPDATE;
 
+		// 拥塞算法处理ack event
 		tcp_in_ack_event(sk, CA_ACK_WIN_UPDATE);
 
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPHPACKS);
@@ -3630,6 +3649,7 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 		else
 			NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPPUREACKS);
 
+		// 根据发送序列号ack seq和ack号
 		flag |= tcp_ack_update_window(sk, skb, ack, ack_seq);
 
 		if (TCP_SKB_CB(skb)->sacked)

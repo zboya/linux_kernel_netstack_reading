@@ -1242,7 +1242,7 @@ static int sock_fasync(int fd, struct file *filp, int on)
 }
 
 /* This function may be called only under rcu_lock */
-
+// 普通数据发送SIGIO，带外数据发送SIGURG给应用程序
 int sock_wake_async(struct socket_wq *wq, int how, int band)
 {
 	if (!wq || !wq->fasync_list)
