@@ -174,6 +174,7 @@ void tcp_rate_gen(struct sock *sk, u32 delivered, u32 lost,
 }
 
 /* If a gap is detected between sends, mark the socket application-limited. */
+// 如果在发送之间检测到间隙，请标记套接字应用程序限制。
 void tcp_rate_check_app_limited(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);

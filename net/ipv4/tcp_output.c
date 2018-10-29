@@ -145,6 +145,7 @@ void tcp_cwnd_restart(struct sock *sk, s32 delta)
 }
 
 /* Congestion state accounting after a packet has been sent. */
+// 数据包发送后的拥塞状态记帐。
 static void tcp_event_data_sent(struct tcp_sock *tp,
 				struct sock *sk)
 {
@@ -152,6 +153,7 @@ static void tcp_event_data_sent(struct tcp_sock *tp,
 	const u32 now = tcp_jiffies32;
 
 	if (tcp_packets_in_flight(tp) == 0)
+		// 如果在管道中的数据为0，那么触发启动拥塞事件
 		tcp_ca_event(sk, CA_EVENT_TX_START);
 
 	tp->lsndtime = now;
@@ -1001,13 +1003,16 @@ static bool tcp_needs_internal_pacing(const struct sock *sk)
 	return smp_load_acquire(&sk->sk_pacing_status) == SK_PACING_NEEDED;
 }
 
+// 根据数据包的长度和发送速率计算出下一次发送数据包的时间
 static void tcp_internal_pacing(struct sock *sk, const struct sk_buff *skb)
 {
 	u64 len_ns;
 	u32 rate;
 
+	// bbr需要
 	if (!tcp_needs_internal_pacing(sk))
 		return;
+	// 当前的rate
 	rate = sk->sk_pacing_rate;
 	if (!rate || rate == ~0U)
 		return;
@@ -1015,8 +1020,13 @@ static void tcp_internal_pacing(struct sock *sk, const struct sk_buff *skb)
 	/* Should account for header sizes as sch_fq does,
 	 * but lets make things simple.
 	 */
+
+	// 发送len长度的数据理论需要多少ns
 	len_ns = (u64)skb->len * NSEC_PER_SEC;
 	do_div(len_ns, rate);
+	// 此时len_ns就是发送该数据包的理论时间
+
+	// 启动pacing_timer，设置下一次定时器触发的时间
 	hrtimer_start(&tcp_sk(sk)->pacing_timer,
 		      ktime_add_ns(ktime_get(), len_ns),
 		      HRTIMER_MODE_ABS_PINNED);
@@ -1048,9 +1058,14 @@ static void tcp_update_skb_after_send(struct tcp_sock *tp, struct sk_buff *skb)
  * SKB，而TCP必须要接到对应的ACK后才能真正释放数据，因此
  * 在发送前会根据参数确定是克隆还是复制一份SKB用于发送。
  */ 
-//最终的tcp发送都会调用这个 clone_it表示发送发送队列的第一个SKB的时候，采用克隆skb还是直接使用skb，
+// 最终的tcp发送都会调用这个 clone_it表示发送发送队列的第一个SKB的时候，采用克隆skb还是直接使用skb，
 // 如果是发送应用层数据则使用克隆的，等待对方应答ack回来才把数据删除。如果是会送ack信息，则无需克隆
-//如果不支持TSO或者GSO这里的SKB->len为mss，否则如果支持TSO并且有数据再shinfo中，则这里的SKB长度为shinfo或者拥塞窗口的最小值
+// 如果不支持TSO或者GSO这里的SKB->len为mss，否则如果支持TSO并且有数据再shinfo中，则这里的SKB长度为shinfo或者拥塞窗口的最小值
+//
+// 对于拥塞的处理：
+// tcp_event_ack_sent统计我们发送了多少ack
+// tcp_event_data_sent 数据包发送后的拥塞状态记帐。
+// tcp_internal_pacing 计算bbr下一次发送数据包的时间
 static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, int clone_it,
 			    gfp_t gfp_mask)
 {
@@ -1205,8 +1220,11 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, int clone_it,
 	 * 确定本端延时确认是否进入pingpong模式。
 	 */
 	if (skb->len != tcp_header_size) {
+		// 数据包发送后的拥塞状态记帐。
 		tcp_event_data_sent(tp, sk);
+		// 统计发送出去的data seg数量
 		tp->data_segs_out += tcp_skb_pcount(skb);
+		// bbr算法需要计算下一次发送数据的时间
 		tcp_internal_pacing(sk, skb);
 	}
 
@@ -1214,6 +1232,7 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, int clone_it,
 		TCP_ADD_STATS(sock_net(sk), TCP_MIB_OUTSEGS,
 			      tcp_skb_pcount(skb));
 
+	// 统计发送出去的所有seg数量
 	tp->segs_out += tcp_skb_pcount(skb);
 	/* OK, its time to fill skb_shinfo(skb)->gso_{segs|size} */
 	skb_shinfo(skb)->gso_segs = tcp_skb_pcount(skb);
@@ -1947,6 +1966,7 @@ static inline bool tcp_nagle_test(const struct tcp_sock *tp, const struct sk_buf
 }
 
 /* Does at least the first segment of SKB fit into the send window? */
+// 判断发送的数据包是否超过了发送窗口
 static bool tcp_snd_wnd_test(const struct tcp_sock *tp,
 			     const struct sk_buff *skb,
 			     unsigned int cur_mss)
@@ -2439,6 +2459,11 @@ void tcp_chrono_stop(struct sock *sk, const enum tcp_chrono type)
  * nonagle: 标识是否启用nonagle算法。
  */ 
 // 最终调用tcp_transmit_skb   
+// 对于拥塞的处理：
+// 如果开启了pacing发送，检查是否应该发送，如果还不到发送的时机，停止发送
+// 如果拥塞窗口为0，停止发送
+// 如果该数据包超过了发送窗口，停止发送
+// 上面的条件都不符合就封装成tcp segment发送出去
 static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 			   int push_one, gfp_t gfp)
 {
@@ -2620,6 +2645,7 @@ repair:
 			break;
 	}
 
+	// 如果发送窗口有限制，应该探测发送机制
 	if (is_rwnd_limited)
 		tcp_chrono_start(sk, TCP_CHRONO_RWND_LIMITED);
 	else
