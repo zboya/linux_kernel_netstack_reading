@@ -1056,6 +1056,7 @@ static inline void tcp_set_ca_state(struct sock *sk, const u8 ca_state)
 	icsk->icsk_ca_state = ca_state;
 }
 
+// 处理拥塞事件
 static inline void tcp_ca_event(struct sock *sk, const enum tcp_ca_event event)
 {
 	const struct inet_connection_sock *icsk = inet_csk(sk);

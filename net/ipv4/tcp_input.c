@@ -81,6 +81,19 @@
 
 int sysctl_tcp_max_orphans __read_mostly = NR_FILE;
 
+
+// https://www.cnblogs.com/bonelee/p/9077266.html
+// CWR：CWR 标志与后面的 ECE 标志都用于 IP 首部的 ECN 字段，ECE 标志为 1 时，则通知对方已将拥塞窗口缩小；
+// ECE：若其值为 1 则会通知对方，从对方到这边的网络有阻塞。在收到数据包的 IP 首部中 ECN 为 1 时将 TCP 首部中的 ECE 设为 1.；
+// URG：该位设为 1，表示包中有需要紧急处理的数据，对于需要紧急处理的数据，与后面的紧急指针有关；
+// ACK：该位设为 1，确认应答的字段有效，TCP规定除了最初建立连接时的 SYN 包之外该位必须设为 1；
+// PSH：该位设为 1，表示需要将收到的数据立刻传给上层应用协议，若设为 0，则先将数据进行缓存；
+// RST：该位设为 1，表示 TCP 连接出现异常必须强制断开连接；
+// SYN：用于建立连接，该位设为 1，表示希望建立连接，并在其序列号的字段进行序列号初值设定；
+// FIN：该位设为 1，表示今后不再有数据发送，希望断开连接。当通信结束希望断开连接时，
+// 通信双方的主机之间就可以相互交换 FIN 位置为 1 的 TCP 段。每个主机又对对方的 FIN 
+// 包进行确认应答之后可以断开连接。不过，主机收到 FIN 设置为 1 的 TCP 段之后不必马上回复一个 FIN 包，
+// 而是可以等到缓冲区中的所有数据都因为已成功发送而被自动删除之后再发 FIN 包；
 #define FLAG_DATA		0x01 /* Incoming frame contained data.		*/
 #define FLAG_WIN_UPDATE		0x02 /* Incoming ACK was a window update.	*/
 #define FLAG_DATA_ACKED		0x04 /* This ACK acknowledged new data.		*/
@@ -99,9 +112,13 @@ int sysctl_tcp_max_orphans __read_mostly = NR_FILE;
 #define FLAG_NO_CHALLENGE_ACK	0x8000 /* do not call tcp_send_challenge_ack()	*/
 #define FLAG_ACK_MAYBE_DELAYED	0x10000 /* Likely a delayed ACK */
 
+// FLAG_ACKED表示sync_ack或者data ack
 #define FLAG_ACKED		(FLAG_DATA_ACKED|FLAG_SYN_ACKED)
+// FLAG_NOT_DUP表示有数据包，有窗口更新，有acked
 #define FLAG_NOT_DUP		(FLAG_DATA|FLAG_WIN_UPDATE|FLAG_ACKED)
+// 表示是否在进入拥塞状态的时候被alert(原因可能是SACK丢包或者路由器提示拥塞)
 #define FLAG_CA_ALERT		(FLAG_DATA_SACKED|FLAG_ECE|FLAG_DSACKING_ACK)
+// 选择确认
 #define FLAG_FORWARD_PROGRESS	(FLAG_ACKED|FLAG_DATA_SACKED)
 
 #define TCP_REMNANT (TCP_FLAG_FIN|TCP_FLAG_URG|TCP_FLAG_SYN|TCP_FLAG_PSH)
@@ -2747,12 +2764,15 @@ static bool tcp_force_fast_retransmit(struct sock *sk)
  * It does _not_ decide what to send, it is made in function
  * tcp_xmit_retransmit_queue().
  */
+// 处理一个事件，能够不那么琐碎的更新在管道中的数据
+// 这个函数的主要目标是
 static void tcp_fastretrans_alert(struct sock *sk, const u32 prior_snd_una,
 				  bool is_dupack, int *ack_flag, int *rexmit)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
 	int fast_rexmit = 0, flag = *ack_flag;
+	// 判断是不是丢包：若是重复ACK 或者 SACK而且提前确认中没有到的包数量>重拍指标
 	bool do_lost = is_dupack || ((flag & FLAG_DATA_SACKED) &&
 				     tcp_force_fast_retransmit(sk));
 
@@ -2765,10 +2785,12 @@ static void tcp_fastretrans_alert(struct sock *sk, const u32 prior_snd_una,
 		tp->prior_ssthresh = 0;
 
 	/* B. In all the states check for reneging SACKs. */
+	// 检查ACK是不是确认了已经被SACK选择确认的包了
 	if (tcp_check_sack_reneging(sk, flag))
 		return;
 
 	/* C. Check consistency of the current state. */
+  	// 检查丢失的包应该比发送出去的包小，即确定确定left_out < packets_out
 	tcp_verify_left_out(tp);
 
 	/* D. Check state exit conditions. State can be terminated
@@ -2776,7 +2798,7 @@ static void tcp_fastretrans_alert(struct sock *sk, const u32 prior_snd_una,
 	if (icsk->icsk_ca_state == TCP_CA_Open) {
 		WARN_ON(tp->retrans_out != 0);
 		tp->retrans_stamp = 0;
-	} else if (!before(tp->snd_una, tp->high_seq)) {
+	} else if (!before(tp->snd_una, tp->high_seq)) { // tp->high_seq >= tp->snd_una
 		switch (icsk->icsk_ca_state) {
 		case TCP_CA_CWR:
 			/* CWR is to be held something *above* high_seq
@@ -3242,6 +3264,30 @@ static void tcp_ack_probe(struct sock *sk)
 	}
 }
 
+
+// 判断一个ACK是否可疑：
+// 返回0表示ACK正常，返回1表示可疑
+// 什么算是可疑的呢？
+// 如果已经处于拥塞状态，则会显示可疑；
+// 如果此ACK为拥塞信号，则会显示可疑。
+// 可疑的条件（或）：
+
+//   (1) 不属于以下四种(FLAG_NOT_DUP)：
+//          FLAG_DATA：接收的ACK段是负荷数据携带的
+//          FLAG_WIN_UPDATE：接收的ACK段更新了发送窗口
+//          FLAG_DATA_ACKED：接收的ACK确认了新的数据
+//          FLAG_SYN_ACKED：接收的ACK确认了SYN段
+
+//   (2) 属于以下两种(FLAG_CA_ALERT)：
+//          FLAG_DATA_SACKED：是新的SACK
+//          FLAG_ECE：在ACK中存在ECE标志，显示收到拥塞通知
+
+//   (3) 拥塞状态不为Open
+// --------------------- 
+// 作者：zhangskd 
+// 来源：CSDN 
+// 原文：https://blog.csdn.net/zhangskd/article/details/9923835 
+// 版权声明：本文为博主原创文章，转载请附上博文链接！
 static inline bool tcp_ack_is_dubious(const struct sock *sk, const int flag)
 {
 	return !(flag & FLAG_NOT_DUP) || (flag & FLAG_CA_ALERT) ||
@@ -3268,16 +3314,20 @@ static inline bool tcp_may_raise_cwnd(const struct sock *sk, const int flag)
  * It's called toward the end of processing an ACK with precise rate
  * information. All transmission or retransmission are delayed afterwards.
  */
+// 拥塞控制算法，对于bbr来说调用cong_control，然后就直接返回
+// 相当于bbr完全接管了拥塞控制
 static void tcp_cong_control(struct sock *sk, u32 ack, u32 acked_sacked,
 			     int flag, const struct rate_sample *rs)
 {
 	const struct inet_connection_sock *icsk = inet_csk(sk);
 
 	if (icsk->icsk_ca_ops->cong_control) {
+		// 调用bbr算法后返回
 		icsk->icsk_ca_ops->cong_control(sk, rs);
 		return;
 	}
 
+	// bbr算法不会执行这里
 	if (tcp_in_cwnd_reduction(sk)) {
 		/* Reduce cwnd if state mandates */
 		tcp_cwnd_reduction(sk, acked_sacked, flag);
@@ -3305,6 +3355,8 @@ static inline bool tcp_may_update_window(const struct tcp_sock *tp,
 }
 
 /* If we update tp->snd_una, also update tp->bytes_acked */
+// 根据对端的ack号，更新最小未确认号
+// 更新已确认的字节数
 static void tcp_snd_una_update(struct tcp_sock *tp, u32 ack)
 {
 	u32 delta = ack - tp->snd_una;
@@ -3345,9 +3397,11 @@ static int tcp_ack_update_window(struct sock *sk, const struct sk_buff *skb, u32
 	if (tcp_may_update_window(tp, ack, ack_seq, nwin)) {
 		// 标记窗口更新
 		flag |= FLAG_WIN_UPDATE;
+
+		// tp->snd_wl1 = ack_seq;
 		tcp_update_wl(tp, ack_seq);
 
-		// 如果发送窗口和现在计算的不一样，则发送
+		// 如果发送窗口和现在计算的不一样，则更改发送窗口
 		if (tp->snd_wnd != nwin) {
 			tp->snd_wnd = nwin;
 
@@ -3360,6 +3414,7 @@ static int tcp_ack_update_window(struct sock *sk, const struct sk_buff *skb, u32
 			if (!tcp_write_queue_empty(sk))
 				tcp_slow_start_after_idle_check(sk);
 
+			// 更新最大的接收窗口
 			if (nwin > tp->max_window) {
 				tp->max_window = nwin;
 				tcp_sync_mss(sk, inet_csk(sk)->icsk_pmtu_cookie);
@@ -3367,6 +3422,7 @@ static int tcp_ack_update_window(struct sock *sk, const struct sk_buff *skb, u32
 		}
 	}
 
+	// 更新最小未确认的序号
 	tcp_snd_una_update(tp, ack);
 
 	return flag;
@@ -3466,6 +3522,7 @@ static void tcp_replace_ts_recent(struct tcp_sock *tp, u32 seq)
  * ack is after tlp_high_seq.
  * Ref: loss detection algorithm in draft-dukkipati-tcpm-tcp-loss-probe.
  */
+// http://perthcharles.github.io/2015/10/31/wiki-network-tcp-tlp/
 static void tcp_process_tlp_ack(struct sock *sk, u32 ack, int flag)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -3493,6 +3550,7 @@ static void tcp_process_tlp_ack(struct sock *sk, u32 ack, int flag)
 	}
 }
 
+// 调用拥塞算法的 in_ack_event 函数，但bbr算法没有该函数
 static inline void tcp_in_ack_event(struct sock *sk, u32 flags)
 {
 	const struct inet_connection_sock *icsk = inet_csk(sk);
@@ -3537,6 +3595,10 @@ static void tcp_xmit_recovery(struct sock *sk, int rexmit)
 // （5）收到带SYN、FIN标记的包时
 // 
 // http://lib.csdn.net/article/operatingsystem/26582
+// 
+// https://blog.csdn.net/shanshanpt/article/details/21798421
+// 对于拥塞的处理：
+// 
 static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
@@ -3649,7 +3711,7 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 		else
 			NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPPUREACKS);
 
-		// 根据发送序列号ack seq和ack号
+		// 根据ack序列号和ack号
 		flag |= tcp_ack_update_window(sk, skb, ack, ack_seq);
 
 		if (TCP_SKB_CB(skb)->sacked)
@@ -3664,6 +3726,7 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 		if (flag & FLAG_WIN_UPDATE)
 			ack_ev_flags |= CA_ACK_WIN_UPDATE;
 
+		// 拥塞算法处理ack
 		tcp_in_ack_event(sk, ack_ev_flags);
 	}
 
@@ -3682,13 +3745,17 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 	tcp_rack_update_reo_wnd(sk, &rs);
 
 	if (tp->tlp_high_seq)
+		// Tail Loss Probe 处理，解决尾丢包的问题
 		tcp_process_tlp_ack(sk, ack, flag);
 	/* If needed, reset TLP/RTO timer; RACK may later override this. */
 	if (flag & FLAG_SET_XMIT_TIMER)
 		tcp_set_xmit_timer(sk);
 
+	// 判断ack是否可疑，其实本质就是判断可不可以增大拥塞窗口
 	if (tcp_ack_is_dubious(sk, flag)) {
+		// snduna未更改且有可能ack重复了，标记为ack重复
 		is_dupack = !(flag & (FLAG_SND_UNA_ADVANCED | FLAG_NOT_DUP));
+		// 进入拥塞控制，快速重传
 		tcp_fastretrans_alert(sk, prior_snd_una, is_dupack, &flag,
 				      &rexmit);
 	}
@@ -3696,11 +3763,15 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 	if ((flag & FLAG_FORWARD_PROGRESS) || !(flag & FLAG_NOT_DUP))
 		sk_dst_confirm(sk);
 
+	// 一些采样参数，给bbr用的
 	delivered = tp->delivered - delivered;	/* freshly ACKed or SACKed */
 	lost = tp->lost - lost;			/* freshly marked lost */
 	rs.is_ack_delayed = !!(flag & FLAG_ACK_MAYBE_DELAYED);
+	// 根据参数信息计算得到rs，给bbr用的
 	tcp_rate_gen(sk, delivered, lost, is_sack_reneg, sack_state.rate);
+	// 调用拥塞控制的入口函数，比如bbr的bbr_main
 	tcp_cong_control(sk, ack, delivered, flag, sack_state.rate);
+	// 如果丢包了，需要触发重传
 	tcp_xmit_recovery(sk, rexmit);
 	return 1;
 
@@ -5545,6 +5616,11 @@ discard:
 // （6）报文的时间戳选项解析失败
 // （7）报文的PAWS检查失败
 // https://blog.csdn.net/u011130578/article/details/44723635
+//
+// 对拥塞控制的处理：
+// tcp_ack 处理ack报文，更新窗口
+// tcp_rcv_rtt_measure_ts 更新rtt
+// tcp_event_data_recv 更新拥塞控制信息（包括拥塞窗口）
 void tcp_rcv_established(struct sock *sk, struct sk_buff *skb,
 			 const struct tcphdr *th)
 {
@@ -5658,6 +5734,7 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb,
 			    tp->rcv_nxt == tp->rcv_wup)
 				tcp_store_ts_recent(tp); // 记录接收相关的时间戳
 
+			// 重新测量rtt和更新rtt
 			tcp_rcv_rtt_measure_ts(sk, skb);
 
 			NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPHPHITS);
