@@ -314,7 +314,7 @@ static void bbr_save_cwnd(struct sock *sk)
 		bbr->prior_cwnd = max(bbr->prior_cwnd, tp->snd_cwnd);
 }
 
-// 由Linux tcp_ca_event调用
+// 由Linux tcp_ca_event 调用
 static void bbr_cwnd_event(struct sock *sk, enum tcp_ca_event event)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -1080,6 +1080,7 @@ static struct tcp_congestion_ops tcp_bbr_cong_ops __read_mostly = {
 	.cong_control	= bbr_main,
 	.sndbuf_expand	= bbr_sndbuf_expand,
 	.undo_cwnd	= bbr_undo_cwnd,
+	// linux/include/net/tcp.h tcp_ca_event 函数调用
 	.cwnd_event	= bbr_cwnd_event,
 	.ssthresh	= bbr_ssthresh,
 	.min_tso_segs	= bbr_min_tso_segs,
