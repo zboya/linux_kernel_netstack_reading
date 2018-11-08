@@ -2464,6 +2464,11 @@ void tcp_chrono_stop(struct sock *sk, const enum tcp_chrono type)
 // 如果拥塞窗口为0，停止发送
 // 如果该数据包超过了发送窗口，停止发送
 // 上面的条件都不符合就封装成tcp segment发送出去
+// 
+// tcp_write_xmit是处理拥塞控制的关键函数，很多人都知道swnd=min(rwnd,cwnd)
+// 但实际上linux上的实现不是直接求rwdn和cwnd的较小值，而是优先检查
+// 发送中的数据端是否大于cwnd，如果大于cwnd说明发送的数据太多了，暂时不发送了。
+// 然后再检查当前发送的skb的序列号是否超过rwnd窗口，如果超过，暂时也不发送了。
 static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 			   int push_one, gfp_t gfp)
 {
@@ -2645,7 +2650,7 @@ repair:
 			break;
 	}
 
-	// 如果发送窗口有限制，应该探测发送机制
+	// 如果接收窗口有限制，应该启动探测机制
 	if (is_rwnd_limited)
 		tcp_chrono_start(sk, TCP_CHRONO_RWND_LIMITED);
 	else
