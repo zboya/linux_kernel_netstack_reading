@@ -407,6 +407,7 @@ struct sock {
 	unsigned long		sk_tsq_flags;
 	union {
 		struct sk_buff	*sk_send_head;
+		// 清除重传队列，重传队列中保存着已经发送但还未确认的数据段
 		struct rb_root	tcp_rtx_queue;
 	};
 	struct sk_buff_head	sk_write_queue;

@@ -273,6 +273,7 @@ struct tcp_sock {
 	u32	tlp_high_seq;	/* snd_nxt at the time of TLP retransmit. */
 
 /* RTT measurement */
+    // 数据包最近发送或接收的时间
 	u64	tcp_mstamp;	/* most recent packet received/sent */
 	// 平滑rtt，单位us
 	u32	srtt_us;	/* smoothed round trip time << 3 in usecs */
@@ -320,6 +321,7 @@ struct tcp_sock {
 	u32	prr_delivered;	/* Number of newly delivered packets to
 				 * receiver in Recovery. */
 	u32	prr_out;	/* Total number of pkts sent during Recovery. */
+	// 已交付的数据段总和，包括重传的
 	u32	delivered;	/* Total data packets delivered incl. rexmits */
 	u32	lost;		/* Total data packets lost incl. rexmits */
 	u32	app_limited;	/* limited until "delivered" reaches this val */

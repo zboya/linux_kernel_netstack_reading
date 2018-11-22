@@ -28,6 +28,7 @@ https://github.com/sheepbao/linux_kernel_netstack_reading
 * 2018-10-24 阅读一些传输控制层的结构
 * 2018-10-31 着重看了一下tcp的拥塞控制
 * 2018-11-07 添加对发送窗口的理解
+* 2018-11-22 阅读tcp rate算法实现
 
 
 ### 时间

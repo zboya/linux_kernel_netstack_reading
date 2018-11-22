@@ -1196,6 +1196,10 @@ static int tcp_match_skb_to_sack(struct sock *sk, struct sk_buff *skb,
 }
 
 /* Mark the given newly-SACKed range as such, adjusting counters and hints. */
+// 这个函数用来设置对应的tag，这里所要设置的也就是tcp_cb的sacked域
+// 如果一切都正常的话，我们最终就会设置skb的这个域为TCPCB_SACKED_ACKED，也就是已经被sack过了。 
+// 这个函数处理比较简单，主要就是通过序列号以及sacked本身的值最终来确认sacked要被设置的值。 
+// 这里我们还记得，一开始sacked是被初始化为sack option的偏移(如果是正确的sack)的.
 static u8 tcp_sacktag_one(struct sock *sk,
 			  struct tcp_sacktag_state *state, u8 sacked,
 			  u32 start_seq, u32 end_seq,
@@ -1516,6 +1520,7 @@ fallback:
 	return NULL;
 }
 
+// 遍历两个序号之间的skb，通常用于遍历一个SACK块
 static struct sk_buff *tcp_sacktag_walk(struct sk_buff *skb, struct sock *sk,
 					struct tcp_sack_block *next_dup,
 					struct tcp_sacktag_state *state,
@@ -1645,6 +1650,8 @@ static int tcp_sack_cache_ok(const struct tcp_sock *tp, const struct tcp_sack_bl
 	return cache < tp->recv_sack_cache + ARRAY_SIZE(tp->recv_sack_cache);
 }
 
+// 处理sack
+// https://blog.csdn.net/lmjjw/article/details/9992439
 static int
 tcp_sacktag_write_queue(struct sock *sk, const struct sk_buff *ack_skb,
 			u32 prior_snd_una, struct tcp_sacktag_state *state)
@@ -2927,6 +2934,18 @@ static bool tcp_ack_update_rtt(struct sock *sk, const int flag,
 
 		seq_rtt_us = ca_rtt_us = delta_us;
 	}
+
+	// 关于rs->rtt_us的采集
+	// 一个最大的疑问就是，为什么不直接使用系统的srtt来更新bbr的min_rtt_us？
+	//    答案很简单，因为srtt是经过移动指数平均的，虽然已经过滤了噪点，但还是会受到噪点的影响，
+	// 这里的噪点问题主要是BufferBloat的影响，因此这个srtt并不受bbr信任！此外，
+	// 系统的srtt计算时并不会针对被SACK的数据包采集RTT样本，而bbr并不在乎ACK和SACK，
+	// 不在乎丢包和乱序，所以bbr必须自己维护一套采集真实RTT(起码相对真实)的方法。
+	// --------------------- 
+	// 作者：dog250 
+	// 来源：CSDN 
+	// 原文：https://blog.csdn.net/dog250/article/details/52879298 
+	// 版权声明：本文为博主原创文章，转载请附上博文链接！
 	rs->rtt_us = ca_rtt_us; /* RTT of last (S)ACKed packet (or -1) */
 	if (seq_rtt_us < 0)
 		return false;
@@ -3048,6 +3067,9 @@ static void tcp_ack_tstamp(struct sock *sk, struct sk_buff *skb,
  * is before the ack sequence we can discard it as it's confirmed to have
  * arrived at the other end.
  */
+// 清除重传队列，重传队列中保存着已经发送但还未确认的数据段
+// 根据ack来确定哪些tcp seg已经确认了，然后将它清除。
+// 清除的同时还会调用 tcp_rate_skb_delivered 标记一下时间
 static int tcp_clean_rtx_queue(struct sock *sk, u32 prior_fack,
 			       u32 prior_snd_una,
 			       struct tcp_sacktag_state *sack)
@@ -3157,8 +3179,10 @@ static int tcp_clean_rtx_queue(struct sock *sk, u32 prior_fack,
 	if (skb && (TCP_SKB_CB(skb)->sacked & TCPCB_SACKED_ACKED))
 		flag |= FLAG_SACK_RENEGING;
 
+	/* 如果这是被正常顺序ACK的数据包，那么ca_rtt_us就取当前时间和最后被ACK的数据包发送时间之差。*/
 	if (likely(first_ackt) && !(flag & FLAG_RETRANS_DATA_ACKED)) {
 		seq_rtt_us = tcp_stamp_us_delta(tp->tcp_mstamp, first_ackt);
+		// 接收到ack的时间 - 最后一个数据段的发送时间
 		ca_rtt_us = tcp_stamp_us_delta(tp->tcp_mstamp, last_ackt);
 
 		if (pkts_acked == 1 && last_in_flight < tp->mss_cache &&
@@ -3172,6 +3196,8 @@ static int tcp_clean_rtx_queue(struct sock *sk, u32 prior_fack,
 			flag |= FLAG_ACK_MAYBE_DELAYED;
 		}
 	}
+	
+	/* 如果数据是被SACK的，那么同样，ca_rtt_us也是取当前时间与最后被SACK的时间之差 */
 	if (sack->first_sackt) {
 		sack_rtt_us = tcp_stamp_us_delta(tp->tcp_mstamp, sack->first_sackt);
 		ca_rtt_us = tcp_stamp_us_delta(tp->tcp_mstamp, sack->last_sackt);
@@ -3333,6 +3359,7 @@ static void tcp_cong_control(struct sock *sk, u32 ack, u32 acked_sacked,
 		tcp_cwnd_reduction(sk, acked_sacked, flag);
 	} else if (tcp_may_raise_cwnd(sk, flag)) {
 		/* Advance cwnd if state allows */
+		// 慢启动和拥塞避免都在这里
 		tcp_cong_avoid(sk, ack, acked_sacked);
 	}
 	tcp_update_pacing_rate(sk);
@@ -3598,7 +3625,8 @@ static void tcp_xmit_recovery(struct sock *sk, int rexmit)
 // 
 // https://blog.csdn.net/shanshanpt/article/details/21798421
 // 对于拥塞的处理：
-// 
+// tcp_cong_control 慢启动和拥塞避免
+// tcp_fastretrans_alert 拥塞控制，快速重传
 static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
@@ -3715,6 +3743,7 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 		flag |= tcp_ack_update_window(sk, skb, ack, ack_seq);
 
 		if (TCP_SKB_CB(skb)->sacked)
+			// https://blog.csdn.net/lmjjw/article/details/9992439
 			flag |= tcp_sacktag_write_queue(sk, skb, prior_snd_una,
 							&sack_state);
 
@@ -3740,6 +3769,7 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 		goto no_queue;
 
 	/* See if we can take anything off of the retransmit queue. */
+	// 如果重传队列中的一些数据已经被确认，那么， 需要从重传队列中清除出去
 	flag |= tcp_clean_rtx_queue(sk, prior_fack, prior_snd_una, &sack_state);
 
 	tcp_rack_update_reo_wnd(sk, &rs);

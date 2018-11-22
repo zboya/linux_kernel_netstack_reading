@@ -506,6 +506,9 @@ static bool bbr_is_next_cycle_phase(struct sock *sk,
 	 * small (e.g. on a LAN). We do not persist if packets are lost, since
 	 * a path with small buffers may not hold that much.
 	 */
+	// 踩油门的时间是否达到一个RTT了，如果是，进入下一个cycle。
+	// 或者现在检测到了丢包，进入下一个cycle。
+	// 或者现在 inflignt 数据大于 目标cwnd，进入下一个cycle。
 	if (bbr->pacing_gain > BBR_UNIT)
 		return is_full_length &&
 			(rs->losses ||  /* perhaps pacing_gain*BDP won't fit */
@@ -515,6 +518,8 @@ static bool bbr_is_next_cycle_phase(struct sock *sk,
 	 * probing didn't find more bw. If inflight falls to match BDP then we
 	 * estimate queue is drained; persisting would underutilize the pipe.
 	 */
+	// 踩刹车的时间是否达到一个RTT，如果是，进入下一个cycle
+	// 或者 inflight 小于等于 目标cwnd，进入下一个cycle
 	return is_full_length ||
 		inflight <= bbr_target_cwnd(sk, bw, BBR_UNIT);
 }
@@ -781,6 +786,13 @@ static void bbr_update_bw(struct sock *sk, const struct rate_sample *rs)
  * cross-traffic or radio noise can go away. CUBIC Hystart shares a similar
  * design goal, but uses delay and inter-ACK spacing instead of bandwidth.
  */
+// 使用交付率的变化估算管道何时满：BBR估计如果在bbr_full_bw_cnt（3）
+// 非app限制轮次之后估计的bw没有至少改变 bbr_full_bw_thresh （25％），
+// 则STARTUP填充管道。为什么3轮：
+// 1：rwin自动调谐增长rwin，
+// 2：我们填充更高的rwin，
+// 3：我们获得更高的交付率样本。或者瞬态交叉流量或无线电噪声可能会消失。 
+// CUBIC Hystart有一个类似的设计目标，但使用延迟和内部间隔而不是带宽。
 static void bbr_check_full_bw_reached(struct sock *sk,
 				      const struct rate_sample *rs)
 {
@@ -924,7 +936,7 @@ static void bbr_update_model(struct sock *sk, const struct rate_sample *rs)
 	bbr_update_bw(sk, rs);
 	// bbr循环分析
 	bbr_update_cycle_phase(sk, rs);
-	// 判断最大bw
+	// 判断是否填充满管道了
 	bbr_check_full_bw_reached(sk, rs);
 	// 检查drain，是否需要发送queue中的数据
 	bbr_check_drain(sk, rs);
