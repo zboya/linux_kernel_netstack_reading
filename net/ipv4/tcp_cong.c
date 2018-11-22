@@ -444,11 +444,13 @@ void tcp_reno_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 
 	/* In "safe" area, increase. */
 	if (tcp_in_slow_start(tp)) {
+		// 慢启动
 		acked = tcp_slow_start(tp, acked);
 		if (!acked)
 			return;
 	}
 	/* In dangerous area, increase slowly. */
+	// tcp标准拥塞避免
 	tcp_cong_avoid_ai(tp, tp->snd_cwnd, acked);
 }
 EXPORT_SYMBOL_GPL(tcp_reno_cong_avoid);
