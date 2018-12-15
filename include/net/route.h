@@ -286,6 +286,7 @@ static inline void ip_route_connect_init(struct flowi4 *fl4, __be32 dst, __be32 
 			   sk->sk_uid);
 }
 
+// 根据目标ip来查找路由信息，也会缓存第一次的查找记录
 static inline struct rtable *ip_route_connect(struct flowi4 *fl4,
 					      __be32 dst, __be32 src, u32 tos,
 					      int oif, u8 protocol,
@@ -305,7 +306,9 @@ static inline struct rtable *ip_route_connect(struct flowi4 *fl4,
 		ip_rt_put(rt);
 		flowi4_update_output(fl4, oif, tos, fl4->daddr, fl4->saddr);
 	}
+	// 关于安全
 	security_sk_classify_flow(sk, flowi4_to_flowi(fl4));
+	// 路由查找
 	return ip_route_output_flow(net, fl4, sk);
 }
 

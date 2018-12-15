@@ -367,6 +367,7 @@ static int ip_rcv_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 	/* if ingress device is enslaved to an L3 master device pass the
 	 * skb to its handler for processing
 	 */
+	// 这里增加了这么一个L3mdev调用，正是该L3mdev逻辑的处理，实现了VRF的核心：路由表使用与VRF域关联的策略路由表
 	skb = l3mdev_ip_rcv(skb);
 	if (!skb)
 		return NET_RX_SUCCESS;

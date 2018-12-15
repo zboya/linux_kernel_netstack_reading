@@ -105,6 +105,7 @@ int __ip_local_out(struct net *net, struct sock *sk, struct sk_buff *skb)
 	/* if egress device is enslaved to an L3 master device pass the
 	 * skb to its handler for processing
 	 */
+	// vrf发包的实现
 	skb = l3mdev_ip_out(sk, skb);
 	if (unlikely(!skb))
 		return 0;
