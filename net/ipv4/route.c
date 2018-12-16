@@ -2556,9 +2556,11 @@ struct dst_entry *ipv4_blackhole_route(struct net *net, struct dst_entry *dst_or
 	return rt ? &rt->dst : ERR_PTR(-ENOMEM);
 }
 
+// https://blog.csdn.net/u014211079/article/details/45223947
 struct rtable *ip_route_output_flow(struct net *net, struct flowi4 *flp4,
 				    const struct sock *sk)
 {
+	/*路由查找*/
 	struct rtable *rt = __ip_route_output_key(net, flp4);
 
 	if (IS_ERR(rt))
