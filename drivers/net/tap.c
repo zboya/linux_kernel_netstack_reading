@@ -619,6 +619,7 @@ static inline struct sk_buff *tap_alloc_skb(struct sock *sk, size_t prepad,
 #define TAP_RESERVE HH_DATA_OFF(ETH_HLEN)
 
 /* Get packet from user space buffer */
+// 从用户层的到数据，并发送出去
 static ssize_t tap_get_user(struct tap_queue *q, struct msghdr *m,
 			    struct iov_iter *from, int noblock)
 {
@@ -688,6 +689,7 @@ static ssize_t tap_get_user(struct tap_queue *q, struct msghdr *m,
 			linear = ETH_HLEN;
 	}
 
+	// 分配skb
 	skb = tap_alloc_skb(&q->sk, TAP_RESERVE, copylen,
 			    linear, noblock, &err);
 	if (!skb)
@@ -701,8 +703,10 @@ static ssize_t tap_get_user(struct tap_queue *q, struct msghdr *m,
 	if (err)
 		goto err_kfree;
 
+	// 设置
 	skb_set_network_header(skb, ETH_HLEN);
 	skb_reset_mac_header(skb);
+	// 获取协议网络层协议号
 	skb->protocol = eth_hdr(skb)->h_proto;
 
 	if (vnet_hdr_len) {
@@ -717,7 +721,9 @@ static ssize_t tap_get_user(struct tap_queue *q, struct msghdr *m,
 	/* Move network header to the right position for VLAN tagged packets */
 	if ((skb->protocol == htons(ETH_P_8021Q) ||
 	     skb->protocol == htons(ETH_P_8021AD)) &&
+		 // depth得到以太网头部加上vlan tag的长度
 	    __vlan_get_protocol(skb, skb->protocol, &depth) != 0)
+		// 重新设置帧的头部长度
 		skb_set_network_header(skb, depth);
 
 	rcu_read_lock();
@@ -733,7 +739,9 @@ static ssize_t tap_get_user(struct tap_queue *q, struct msghdr *m,
 	}
 
 	if (tap) {
+		// 设置skb绑定的设备为tap设备
 		skb->dev = tap->dev;
+		// 发送数据帧
 		dev_queue_xmit(skb);
 	} else {
 		kfree_skb(skb);
@@ -764,6 +772,7 @@ static ssize_t tap_write_iter(struct kiocb *iocb, struct iov_iter *from)
 }
 
 /* Put packet to the user space buffer */
+// 从网卡接收数据，发送给用户层
 static ssize_t tap_put_user(struct tap_queue *q,
 			    const struct sk_buff *skb,
 			    struct iov_iter *iter)
@@ -1129,6 +1138,7 @@ static long tap_compat_ioctl(struct file *file, unsigned int cmd,
 }
 #endif
 
+// tap网卡操作集
 static const struct file_operations tap_fops = {
 	.owner		= THIS_MODULE,
 	.open		= tap_open,

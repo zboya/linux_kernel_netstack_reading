@@ -559,6 +559,8 @@ static inline int vlan_get_tag(const struct sk_buff *skb, u16 *vlan_tci)
  * Returns the EtherType of the packet, regardless of whether it is
  * vlan encapsulated (normal or hardware accelerated) or not.
  */
+// 计算链路层的头部长度加上vlan tag的总长度
+// 支持多个vlan tag
 static inline __be16 __vlan_get_protocol(struct sk_buff *skb, __be16 type,
 					 int *depth)
 {
