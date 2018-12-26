@@ -2316,6 +2316,7 @@ static inline void skb_reset_network_header(struct sk_buff *skb)
 	skb->network_header = skb->data - skb->head;
 }
 
+// 重置network_header且增加offset
 static inline void skb_set_network_header(struct sk_buff *skb, const int offset)
 {
 	skb_reset_network_header(skb);

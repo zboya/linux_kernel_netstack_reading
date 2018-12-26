@@ -1389,6 +1389,8 @@ static void tun_flow_uninit(struct tun_struct *tun)
 #define MAX_MTU 65535
 
 /* Initialize net device. */
+// tuntap设备的初始化
+// 主要根据参数flags，生成tun或tap设备
 static void tun_net_init(struct net_device *dev)
 {
 	struct tun_struct *tun = netdev_priv(dev);
@@ -1398,6 +1400,7 @@ static void tun_net_init(struct net_device *dev)
 		dev->netdev_ops = &tun_netdev_ops;
 
 		/* Point-to-Point TUN Device */
+		// 不需要以太网头
 		dev->hard_header_len = 0;
 		dev->addr_len = 0;
 		dev->mtu = 1500;
@@ -2522,6 +2525,7 @@ static const struct attribute_group tun_attr_group = {
 	.attrs = tun_dev_attrs
 };
 
+// tun_set_iff
 static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
 {
 	struct tun_struct *tun;
@@ -2848,6 +2852,7 @@ static int tun_set_ebpf(struct tun_struct *tun, struct tun_prog **prog_p,
 	return __tun_set_ebpf(tun, prog_p, prog);
 }
 
+// tuntap设备的io 操作，比如设置网卡类型
 static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
 			    unsigned long arg, int ifreq_len)
 {
@@ -3286,16 +3291,19 @@ static void tun_chr_show_fdinfo(struct seq_file *m, struct file *file)
 }
 #endif
 
+// tuntap网卡操作集
 static const struct file_operations tun_fops = {
 	.owner	= THIS_MODULE,
 	.llseek = no_llseek,
 	.read_iter  = tun_chr_read_iter,
 	.write_iter = tun_chr_write_iter,
 	.poll	= tun_chr_poll,
+	// tun_chr_ioctl是tuntap网卡的io控制操作
 	.unlocked_ioctl	= tun_chr_ioctl,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl = tun_chr_compat_ioctl,
 #endif
+	// 打开一个fd和一些初始化
 	.open	= tun_chr_open,
 	.release = tun_chr_close,
 	.fasync = tun_chr_fasync,
@@ -3304,6 +3312,7 @@ static const struct file_operations tun_fops = {
 #endif
 };
 
+// 注册文件系统路径
 static struct miscdevice tun_miscdev = {
 	.minor = TUN_MINOR,
 	.name = "tun",

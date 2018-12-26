@@ -3775,8 +3775,8 @@ out:
 	return rc;
 }
 
-//通过ip_local_out走到这里,走到这里的SKB起IP层及其以上各层已经封装完毕。
-//  协议栈向设备发送数据包时都需调用该函数，该函数对SKB进行排队，最终由底层设备驱动程序进行传输
+// 通过ip_local_out走到这里,走到这里的SKB起IP层及其以上各层已经封装完毕。
+// 协议栈向设备发送数据包时都需调用该函数，该函数对SKB进行排队，最终由底层设备驱动程序进行传输
 int dev_queue_xmit(struct sk_buff *skb)
 {
 	return __dev_queue_xmit(skb, NULL);
