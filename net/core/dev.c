@@ -2095,6 +2095,7 @@ again:
 		 * set by sender, so that the second statement is
 		 * just protection against buggy protocols.
 		 */
+		/* skb-nh 应该由发送方正确设置, 因此第二个语句只是针对错误协议的保护。   */
 		skb_reset_mac_header(skb2);
 
 		if (skb_network_header(skb2) < skb2->data ||
@@ -4934,7 +4935,7 @@ static int netif_receive_skb_internal(struct sk_buff *skb)
  *	NET_RX_DROP: packet was dropped
  */
 // 接收poll得到的数据，e100_poll调用
-//netif_receive_skb是链路层接收数据报的最后一站。
+// netif_receive_skb是链路层接收数据报的最后一站。
 // 它根据注册在全局数组ptype_all和ptype_base里的网络层数据报类型，
 // 把数据报递交给不同的网络层协议的接收函数(INET域中主要是ip_rcv和arp_rcv)。
 /*

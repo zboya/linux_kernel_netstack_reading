@@ -500,6 +500,7 @@ static int raw_getfrag(void *from, char *to, int offset, int len, int odd,
 	return ip_generic_getfrag(rfv->msg, to, offset, len, odd, skb);
 }
 
+// raw scoket发送数据的实现
 static int raw_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 {
 	struct inet_sock *inet = inet_sk(sk);
@@ -759,7 +760,7 @@ out:	return ret;
  *	This should be easy, if there is something there
  *	we return it, otherwise we block.
  */
-
+// 从接收队列中，取出数据copy到用户空间
 static int raw_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 		       int noblock, int flags, int *addr_len)
 {
@@ -970,6 +971,7 @@ int raw_abort(struct sock *sk, int err)
 }
 EXPORT_SYMBOL_GPL(raw_abort);
 
+// 原始套接字操作集
 struct proto raw_prot = {
 	.name		   = "RAW",
 	.owner		   = THIS_MODULE,
@@ -981,7 +983,9 @@ struct proto raw_prot = {
 	.init		   = raw_init,
 	.setsockopt	   = raw_setsockopt,
 	.getsockopt	   = raw_getsockopt,
+	// 发送消息函数
 	.sendmsg	   = raw_sendmsg,
+	// 接收消息的函数，且支持带外数据，比如vlan的接收
 	.recvmsg	   = raw_recvmsg,
 	.bind		   = raw_bind,
 	.backlog_rcv	   = raw_rcv_skb,
