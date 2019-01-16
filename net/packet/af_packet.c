@@ -2054,7 +2054,9 @@ static int packet_rcv_vnet(struct msghdr *msg, const struct sk_buff *skb,
  * sequencially, so that if we return skb to original state on exit,
  * we will not harm anyone.
  */
-
+// AF_PACKET raw socket收包实现是通过在ptype_all或ptype_base中注册实现的，
+// __netif_receive_skb_core中会调用此函数，来接收原始套接字的数据包
+// 最后插入套接字的接收队列
 static int packet_rcv(struct sk_buff *skb, struct net_device *dev,
 		      struct packet_type *pt, struct net_device *orig_dev)
 {
@@ -2147,6 +2149,7 @@ static int packet_rcv(struct sk_buff *skb, struct net_device *dev,
 	spin_lock(&sk->sk_receive_queue.lock);
 	po->stats.stats1.tp_packets++;
 	sock_skb_set_dropcount(sk, skb);
+	// 将skb插入接收队列
 	__skb_queue_tail(&sk->sk_receive_queue, skb);
 	spin_unlock(&sk->sk_receive_queue.lock);
 	sk->sk_data_ready(sk);
@@ -4464,6 +4467,7 @@ static const struct proto_ops packet_ops_spkt = {
 	.setsockopt =	sock_no_setsockopt,
 	.getsockopt =	sock_no_getsockopt,
 	.sendmsg =	packet_sendmsg_spkt,
+	// 接收消息，包括一下额外数据，比如vlan tag信息。
 	.recvmsg =	packet_recvmsg,
 	.mmap =		sock_no_mmap,
 	.sendpage =	sock_no_sendpage,

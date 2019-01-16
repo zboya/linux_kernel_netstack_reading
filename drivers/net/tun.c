@@ -2853,6 +2853,10 @@ static int tun_set_ebpf(struct tun_struct *tun, struct tun_prog **prog_p,
 }
 
 // tuntap设备的io 操作，比如设置网卡类型
+// 使 用ioctl()函数操作字符设备文件描述符,将调用字符设备中tun_chr_ioctl 
+// 来设置已经open好的tun/tap设备，如果设置标志为TUNSETIFF，则调用tun_set_iff() 函数，
+// 此函数将完成很重要的一步操作，就是对网卡驱动进行注册register_netdev(&tun->dev)，
+// 网卡驱动的各个处理 例程的挂接在open操作时由tun_chr_open()函数初始化好了。
 static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
 			    unsigned long arg, int ifreq_len)
 {
@@ -3221,6 +3225,8 @@ out:
 	return ret;
 }
 
+// 当 open /dev/net/tun 会调用该函数
+// 设置网卡驱动部分的初始化函数以及网络缓冲区链表的初始化和等待队列的初始化
 static int tun_chr_open(struct inode *inode, struct file * file)
 {
 	struct net *net = current->nsproxy->net_ns;
