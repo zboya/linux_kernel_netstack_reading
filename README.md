@@ -29,6 +29,9 @@ https://github.com/sheepbao/linux_kernel_netstack_reading
 * 2018-10-31 着重看了一下tcp的拥塞控制
 * 2018-11-07 添加对发送窗口的理解
 * 2018-11-22 阅读tcp rate算法实现
+* 2018-12-15 vrf阅读
+* 2018-12-26 阅读tuntap驱动的一些源码
+* 2019-01-16 阅读vlan的处理和一些raw socket的处理
 
 
 ### 时间
