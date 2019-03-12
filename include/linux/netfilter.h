@@ -191,6 +191,8 @@ int nf_hook_slow(struct sk_buff *skb, struct nf_hook_state *state,
  *	okfn must be invoked by the caller in this case.  Any other return
  *	value indicates the packet has been consumed by the hook.
  */
+// 调用钩子函数，如果钩子允许数据包通过, 则返回1。 
+// 在这种情况下, 调用方必须调用函数 okfn。 任何其他返回值都表示数据包已被钩子使用。
 static inline int nf_hook(u_int8_t pf, unsigned int hook, struct net *net,
 			  struct sock *sk, struct sk_buff *skb,
 			  struct net_device *indev, struct net_device *outdev,
@@ -207,6 +209,7 @@ static inline int nf_hook(u_int8_t pf, unsigned int hook, struct net *net,
 #endif
 
 	rcu_read_lock();
+	// 判断网络层协议
 	switch (pf) {
 	case NFPROTO_IPV4:
 		hook_head = rcu_dereference(net->nf.hooks_ipv4[hook]);
