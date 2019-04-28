@@ -582,7 +582,7 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, 
 	skb_orphan(skb);
 
 	/*
-	* 最后通过netfilter模块处理后，调用ip_rcv_finish()
+	* 最后通过netfilter模块处理后，调用 ip_rcv_finish()
 	* 完成IP数据包的输入。
 	*/
 	// NF_INET_PRE_ROUTING 的 hook点

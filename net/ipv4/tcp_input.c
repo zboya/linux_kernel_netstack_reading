@@ -2627,6 +2627,7 @@ void tcp_simple_retransmit(struct sock *sk)
 }
 EXPORT_SYMBOL(tcp_simple_retransmit);
 
+// 进入快速恢复状态
 void tcp_enter_recovery(struct sock *sk, bool ece_ack)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -3141,6 +3142,7 @@ static int tcp_clean_rtx_queue(struct sock *sk, u32 prior_fack,
 		if (sacked & TCPCB_LOST)
 			tp->lost_out -= acked_pcount;
 
+		// 因为有些数据包已经被确认了，那么应该减少网络中的数据包量统计
 		tp->packets_out -= acked_pcount;
 		pkts_acked += acked_pcount;
 		tcp_rate_skb_delivered(sk, skb, sack->rate);
@@ -3179,7 +3181,7 @@ static int tcp_clean_rtx_queue(struct sock *sk, u32 prior_fack,
 	if (skb && (TCP_SKB_CB(skb)->sacked & TCPCB_SACKED_ACKED))
 		flag |= FLAG_SACK_RENEGING;
 
-	/* 如果这是被正常顺序ACK的数据包，那么ca_rtt_us就取当前时间和最后被ACK的数据包发送时间之差。*/
+	/* 如果这是被正常顺序ACK的数据包，那么 ca_rtt_us 就取当前时间和最后被ACK的数据包发送时间之差。*/
 	if (likely(first_ackt) && !(flag & FLAG_RETRANS_DATA_ACKED)) {
 		seq_rtt_us = tcp_stamp_us_delta(tp->tcp_mstamp, first_ackt);
 		// 接收到ack的时间 - 最后一个数据段的发送时间
@@ -3197,7 +3199,7 @@ static int tcp_clean_rtx_queue(struct sock *sk, u32 prior_fack,
 		}
 	}
 	
-	/* 如果数据是被SACK的，那么同样，ca_rtt_us也是取当前时间与最后被SACK的时间之差 */
+	/* 如果数据是被SACK的，那么同样， ca_rtt_us 也是取当前时间与最后被SACK的时间之差 */
 	if (sack->first_sackt) {
 		sack_rtt_us = tcp_stamp_us_delta(tp->tcp_mstamp, sack->first_sackt);
 		ca_rtt_us = tcp_stamp_us_delta(tp->tcp_mstamp, sack->last_sackt);

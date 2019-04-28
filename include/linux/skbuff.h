@@ -676,10 +676,12 @@ struct sk_buff {
 	union {
 		struct {
 			/* These two members must be first. */
+			// 完双向链表
 			struct sk_buff		*next;
 			struct sk_buff		*prev;
 
 			union {
+				// 网络设备指针
 				struct net_device	*dev;
 				/* Some protocols might use this space to store information,
 				 * while device pointer would be NULL.
@@ -703,6 +705,7 @@ struct sk_buff {
 	 * want to keep them across layers you have to do a skb_clone()
 	 * first. This is owned by whoever has the skb queued ATM.
 	 */
+	// 控制模块缓存
 	char			cb[48] __aligned(8);
 
 	union {
@@ -722,8 +725,8 @@ struct sk_buff {
 #if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
 	struct nf_bridge_info	*nf_bridge;
 #endif
-	unsigned int		len,
-				data_len;
+	unsigned int		len,  // 链表长度
+				data_len; // 数据部分长度，由 data 指针指向的内存
 	__u16			mac_len,
 				hdr_len;
 

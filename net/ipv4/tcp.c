@@ -1326,7 +1326,7 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 	sk_clear_bit(SOCKWQ_ASYNC_NOSPACE, sk);
 
 	/* Ok commence sending. */
-	//  已拷贝到发送队列的字节数 
+	// 已拷贝到发送队列的字节数 
 	copied = 0;
 
 restart:

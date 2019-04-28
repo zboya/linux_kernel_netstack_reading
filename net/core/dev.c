@@ -1416,6 +1416,7 @@ static int __dev_open(struct net_device *dev)
 
 	ASSERT_RTNL();
 
+	// 检测设备是否存在，不存在返回错误
 	if (!netif_device_present(dev))
 		return -ENODEV;
 
@@ -1423,6 +1424,7 @@ static int __dev_open(struct net_device *dev)
 	 * If we don't do this there is a chance ndo_poll_controller
 	 * or ndo_poll may be running while we open the device
 	 */
+	// 阻止netpoll尝试执行任何rx路径服务。如果我们不这样做，我们打开设备时可能会运行ndo_poll_controller或ndo_poll
 	netpoll_poll_disable(dev);
 
 	ret = call_netdevice_notifiers(NETDEV_PRE_UP, dev);
@@ -1441,8 +1443,10 @@ static int __dev_open(struct net_device *dev)
 	netpoll_poll_enable(dev);
 
 	if (ret)
+		// 启动网卡失败
 		clear_bit(__LINK_STATE_START, &dev->state);
 	else {
+		// 启动网卡成功
 		dev->flags |= IFF_UP;
 		dev_set_rx_mode(dev);
 		dev_activate(dev);
@@ -3367,6 +3371,8 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 	 * This permits qdisc->running owner to get the lock more
 	 * often and dequeue packets faster.
 	 */
+	// 在尝试获取qdisc主锁之前，启发式强制争用队列在单独的锁上序列化。
+	// 这允许 qdisc->running 所有者更频繁地获取锁定并更快地使数据包出列。
 	contended = qdisc_is_running(q);
 	if (unlikely(contended))
 		spin_lock(&q->busylock);
@@ -3679,14 +3685,14 @@ static int __dev_queue_xmit(struct sk_buff *skb, void *accel_priv)
 		skb_dst_force(skb);
 
 	txq = netdev_pick_tx(dev, skb, accel_priv);
-	//实际上就是获取net_device -> netdev_queue  也就是该dev设备的跟qdisc
+	// 实际上就是获取net_device -> netdev_queue  也就是该dev设备的根qdisc
+	// 对于物理网卡设备, 缺省使用的是FIFO qdisc, 该成员函数非空, 只有逻辑网卡才可能为空
 	q = rcu_dereference_bh(txq->qdisc);
 
 	trace_net_dev_queue(skb);
-	 /*
-      * 如果获取的排队规程定义了"入队"操作，
-      * 说明启用了QoS。
-      */ /*如果这个设备启动了TC,那么把数据包压入队列  见tc_modify_qdisc中的qdisc_graft*/ 
+	 
+	// 如果这个设备启动了TC,那么把数据包压入队列  见tc_modify_qdisc中的qdisc_graft
+	// 如果队列输入非空, 将数据包入队
 	if (q->enqueue) {
 		//则对这个数据包进行QoS处理。 /* qos源码分析参考<TC流速流量控制分析> */  //alloc_netdev_mq可以看出开辟的q的空间为空的，如果不赋值的话
     	//进入出口流控的函数为dev_queue_xmit(); 如果是入口流控, 数据只是刚从网卡设备中收到, 还未交到网络上层处理, 
@@ -7130,6 +7136,7 @@ void __dev_set_rx_mode(struct net_device *dev)
 		ops->ndo_set_rx_mode(dev);
 }
 
+// 设置流控的队列规则，和启动监视定时器
 void dev_set_rx_mode(struct net_device *dev)
 {
 	netif_addr_lock_bh(dev);
@@ -8123,7 +8130,7 @@ EXPORT_SYMBOL(netif_tx_stop_all_queues);
  * 网络设备描述符注册到系统中。完成注册后，会发送NETDEV_REGISTER消息到netdev_chain
  * 通知链中，使得所有对设备注册感兴趣的模块都能接收消息。
  */
-//网络设备注册的时机:加载网络设备的驱动程序 、  擦入可热插拔的网络设备
+//网络设备注册的时机:加载网络设备的驱动程序、擦入可热插拔的网络设备
 //由驱动程序控制的网络设备都将会被注册  
 //alloc_netdev分配好空间后，调用alloc_netdev完成注册
 /*
@@ -8331,6 +8338,7 @@ EXPORT_SYMBOL_GPL(init_dummy_netdev);
  *	and expands the device name if you passed a format string to
  *	alloc_netdev.
  */
+// 网络设备注册函数，对 register_netdevice 的封装
 int register_netdev(struct net_device *dev)
 {
 	int err;

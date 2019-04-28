@@ -49,12 +49,26 @@ struct qdisc_skb_head {
 	spinlock_t	lock;
 };
 
+// 流控处理对外表现是一个黑盒，外部只能看到数据入队和出队，但内部队列是如何操作和管理外面是
+// 不知道的；另外处理队列处理外，流控还有一个调度器，该调度器将数据进行分类，然后对不同类型
+// 的数据采取不同的流控处理，所分的类型可能是多级的，形成一个树型的分类树。
+
+// 流控的基本数据结构是struct Qdisc( queueing discipline ，直译是“排队纪律”，意译为“流控”
+// )，这是内核中为数不多的以大写字母开头结构名称之一：
+// --------------------- 
+// 作者：cxw06023273 
+// 来源：CSDN 
+// 原文：https://blog.csdn.net/cxw06023273/article/details/83809550 
+// 版权声明：本文为博主原创文章，转载请附上博文链接！
 struct Qdisc {
+	// 入队操作
 	int 			(*enqueue)(struct sk_buff *skb,
 					   struct Qdisc *sch,
 					   struct sk_buff **to_free);
+	// 出队操作
 	struct sk_buff *	(*dequeue)(struct Qdisc *sch);
 	unsigned int		flags;
+	// 标志
 #define TCQ_F_BUILTIN		1
 #define TCQ_F_INGRESS		2
 #define TCQ_F_CAN_BYPASS	4
@@ -75,9 +89,11 @@ struct Qdisc {
 #define TCQ_F_NOLOCK		0x100 /* qdisc does not require locking */
 #define TCQ_F_OFFLOADED		0x200 /* qdisc is offloaded to HW */
 	u32			limit;
+	// Qdisc的基本操作结构
 	const struct Qdisc_ops	*ops;
 	struct qdisc_size_table	__rcu *stab;
 	struct hlist_node       hash;
+	// 句柄
 	u32			handle;
 	u32			parent;
 
@@ -91,6 +107,7 @@ struct Qdisc {
 	 * For performance sake on SMP, we put highly modified fields at the end
 	 */
 	struct sk_buff_head	gso_skb ____cacheline_aligned_in_smp;
+	// 数据包链表头
 	struct qdisc_skb_head	q;
 	struct gnet_stats_basic_packed bstats;
 	seqcount_t		running;
@@ -180,19 +197,26 @@ struct Qdisc_class_ops {
 					struct gnet_dump *);
 };
 
+// 流控队列的基本操作结构
 struct Qdisc_ops {
+	// 链表中的下一个
 	struct Qdisc_ops	*next;
+	// 类别操作结构
 	const struct Qdisc_class_ops	*cl_ops;
+	// Qdisc的名称, 从数组大小看应该就是网卡名称
 	char			id[IFNAMSIZ];
+	// 私有数据大小
 	int			priv_size;
 	unsigned int		static_flags;
 
+	// 入队
 	int 			(*enqueue)(struct sk_buff *skb,
 					   struct Qdisc *sch,
 					   struct sk_buff **to_free);
+	// 出队
 	struct sk_buff *	(*dequeue)(struct Qdisc *);
 	struct sk_buff *	(*peek)(struct Qdisc *);
-
+	
 	int			(*init)(struct Qdisc *sch, struct nlattr *arg,
 					struct netlink_ext_ack *extack);
 	void			(*reset)(struct Qdisc *);
