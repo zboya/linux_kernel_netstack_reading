@@ -2811,11 +2811,12 @@ bool sock_is_registered(int family)
 	return family < NPROTO && rcu_access_pointer(net_families[family]);
 }
 
-//设备物理层的初始化net_dev_init
- //TCP/IP协议栈初始化inet_init  其实传输层的协议初始化也在这里面
- //传输层初始化proto_init
- //套接口层初始化sock_init  netfilter_init在套接口层初始化的时候也初始化了
-//套接口层的初始化函数
+// 套接口层的初始化函数
+// 设备物理层的初始化 net_dev_init
+// TCP/IP协议栈初始化 inet_init  其实传输层的协议初始化也在这里面
+// 传输层初始化 proto_init
+// 套接口层初始化 sock_init  
+// 网络过滤子系统初始化 netfilter_init 
 static int __init sock_init(void)
 {
 	int err;
@@ -2853,6 +2854,7 @@ static int __init sock_init(void)
 	 */
 
 #ifdef CONFIG_NETFILTER
+	// 网络过滤子系统的初始化
 	err = netfilter_init();
 	if (err)
 		goto out;

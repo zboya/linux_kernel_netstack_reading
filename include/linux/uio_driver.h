@@ -94,20 +94,23 @@ struct uio_device {
  * @release:		release operation for this uio device
  * @irqcontrol:		disable/enable irqs when 0/1 is written to /dev/uioX
  */
-struct uio_info {
-	struct uio_device	*uio_dev;
-	const char		*name;
-	const char		*version;
-	struct uio_mem		mem[MAX_UIO_MAPS];
-	struct uio_port		port[MAX_UIO_PORT_REGIONS];
-	long			irq;
-	unsigned long		irq_flags;
-	void			*priv;
-	irqreturn_t (*handler)(int irq, struct uio_info *dev_info);
-	int (*mmap)(struct uio_info *info, struct vm_area_struct *vma);
-	int (*open)(struct uio_info *info, struct inode *inode);
-	int (*release)(struct uio_info *info, struct inode *inode);
-	int (*irqcontrol)(struct uio_info *info, s32 irq_on);
+struct uio_info { 
+    struct uio_device   *uio_dev; // 在__uio_register_device中初始化
+    const char      *name; // 调用__uio_register_device之前必须初始化
+    const char      *version; //调用__uio_register_device之前必须初始化
+    struct uio_mem      mem[MAX_UIO_MAPS];
+    struct uio_port     port[MAX_UIO_PORT_REGIONS];
+    long            irq; //分配给uio设备的中断号，调用__uio_register_device之前必须初始化
+    unsigned long       irq_flags;// 调用__uio_register_device之前必须初始化
+    void            *priv; //
+    irqreturn_t (*handler)(int irq, struct uio_info *dev_info); //uio_interrupt中调用，用于中断处理
+                                                                // 调用__uio_register_device之前必须初始化
+    int (*mmap)(struct uio_info *info, struct vm_area_struct *vma); //在uio_mmap中被调用，
+                                                                // 执行设备打开特定操作
+    int (*open)(struct uio_info *info, struct inode *inode);//在uio_open中被调用，执行设备打开特定操作
+    int (*release)(struct uio_info *info, struct inode *inode);//在uio_device中被调用，执行设备打开特定操作
+    int (*irqcontrol)(struct uio_info *info, s32 irq_on);//在uio_write方法中被调用，执行用户驱动的
+                                                        //特定操作。
 };
 
 extern int __must_check

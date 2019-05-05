@@ -468,5 +468,6 @@ static void __exit nf_conntrack_l3proto_ipv4_fini(void)
 	nf_unregister_sockopt(&so_getorigdst);
 }
 
+// ipv4 hook 函数的初始化
 module_init(nf_conntrack_l3proto_ipv4_init);
 module_exit(nf_conntrack_l3proto_ipv4_fini);

@@ -49,6 +49,7 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 			   int push_one, gfp_t gfp);
 
 /* Account for new data that has been sent to the network. */
+// 记录新数据发送到网络中的数量
 static void tcp_event_new_data_sent(struct sock *sk, struct sk_buff *skb)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
@@ -62,6 +63,7 @@ static void tcp_event_new_data_sent(struct sock *sk, struct sk_buff *skb)
 	// https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=75c119afe14f74b4dd967d75ed9f57ab6c0ef045
 	tcp_rbtree_insert(&sk->tcp_rtx_queue, skb);
 
+	// 新增发送出去的数据包数量
 	tp->packets_out += tcp_skb_pcount(skb);
 	//可以看到只有当prior_packets为0时才会重启定时器,而prior_packets则是发送未确认的段的个数,
 	// 也就是说如果发送了很多段,如果前面的段没有确认,那么后面发送的时候不会重启这个定时器.

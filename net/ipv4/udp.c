@@ -77,6 +77,8 @@
  *		2 of the License, or (at your option) any later version.
  */
 
+// udp协议实现的主要代码
+
 #define pr_fmt(fmt) "UDP: " fmt
 
 #include <linux/uaccess.h>
@@ -1978,6 +1980,7 @@ EXPORT_SYMBOL(udp_sk_rx_dst_set);
  *
  *	Note: called only from the BH handler context.
  */
+// upd协议接受广播与组播的处理
 static int __udp4_lib_mcast_deliver(struct net *net, struct sk_buff *skb,
 				    struct udphdr  *uh,
 				    __be32 saddr, __be32 daddr,
@@ -2078,6 +2081,7 @@ static inline int udp4_csum_init(struct sk_buff *skb, struct udphdr *uh,
  *	All we need to do is get the socket, and then do a checksum.
  */
 
+// 处理udp报文函数
 int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 		   int proto)
 {
@@ -2106,6 +2110,7 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 		/* UDP validates ulen. */
 		if (ulen < sizeof(*uh) || pskb_trim_rcsum(skb, ulen))
 			goto short_packet;
+		// 获取udp首部
 		uh = udp_hdr(skb);
 	}
 
@@ -2318,6 +2323,7 @@ int udp_v4_early_demux(struct sk_buff *skb)
 	return 0;
 }
 
+// 接受ip层数据包
 int udp_rcv(struct sk_buff *skb)
 {
 	return __udp4_lib_rcv(skb, &udp_table, IPPROTO_UDP);

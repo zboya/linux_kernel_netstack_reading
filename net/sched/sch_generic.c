@@ -1069,6 +1069,8 @@ static void transition_one_qdisc(struct net_device *dev,
 	}
 }
 
+// 当然noop_qdisc中的调度是不可用的, 只进行丢包处理；网卡在激活(dev_open)时会调用
+// dev_activate()函数重新对qdisc指针赋值，但未对qdisc_ingress赋值:
 void dev_activate(struct net_device *dev)
 {
 	int need_watchdog;
@@ -1078,14 +1080,17 @@ void dev_activate(struct net_device *dev)
 	 * and noqueue_qdisc for virtual interfaces
 	 */
 
+	// 如果当前的qdisc是noop_qdisc，添加默认的 qdisc
 	if (dev->qdisc == &noop_qdisc)
 		attach_default_qdiscs(dev);
 
+	// 如果现在网线没插, 返回
 	if (!netif_carrier_ok(dev))
 		/* Delay activation until next carrier-on event */
 		return;
 
 	need_watchdog = 0;
+	// 将网卡当前的qdisc赋值为qdisc_sleeping所指的qdisc
 	netdev_for_each_tx_queue(dev, transition_one_qdisc, &need_watchdog);
 	if (dev_ingress_queue(dev))
 		transition_one_qdisc(dev, dev_ingress_queue(dev), NULL);
@@ -1254,8 +1259,12 @@ static void dev_init_scheduler_queue(struct net_device *dev,
 	__skb_queue_head_init(&qdisc->skb_bad_txq);
 }
 
+// 在网卡设备的初始化函数register_netdevice()函数中调用dev_init_scheduler()函数对网卡设备的
+// 流控队列处理进行了初始化, 也就是说每个网络网卡设备的qdisc指针都不会是空的
 void dev_init_scheduler(struct net_device *dev)
 {
+	// 处理发出数据的qdisc是必须的,而处理输入数据的qdisc_ingress则不是必须的
+	// 缺省情况下的qdisc
 	dev->qdisc = &noop_qdisc;
 	netdev_for_each_tx_queue(dev, dev_init_scheduler_queue, &noop_qdisc);
 	if (dev_ingress_queue(dev))

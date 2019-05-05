@@ -284,6 +284,7 @@ struct tcp_sock {
 	// 平滑rtt的平均偏差，用来计算rto
 	u32	rttvar_us;	/* smoothed mdev_max			*/
 	u32	rtt_seq;	/* sequence number to update rttvar	*/
+	// rtt_min 是这个连接探测到的最小rtt
 	struct  minmax rtt_min;
 
 	// 从发送队列中发送出去但未确认的tcp seg数目，即 snd_nxt-snd.una

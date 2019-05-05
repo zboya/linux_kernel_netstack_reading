@@ -594,6 +594,7 @@ __netfilter_net_init(struct nf_hook_entries __rcu **e, int max)
 		RCU_INIT_POINTER(e[h], NULL);
 }
 
+// 在 net 网络命名空间中注册网络过滤子系统
 static int __net_init netfilter_net_init(struct net *net)
 {
 	__netfilter_net_init(net->nf.hooks_ipv4, ARRAY_SIZE(net->nf.hooks_ipv4));
@@ -632,10 +633,12 @@ static struct pernet_operations netfilter_net_ops = {
 	.exit = netfilter_net_exit,
 };
 
+// 网络过滤子系统的初始化
 int __init netfilter_init(void)
 {
 	int ret;
 
+	// 调用 netfilter_net_init 进行初始化
 	ret = register_pernet_subsys(&netfilter_net_ops);
 	if (ret < 0)
 		goto err;

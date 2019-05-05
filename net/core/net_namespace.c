@@ -1021,6 +1021,8 @@ static void unregister_pernet_operations(struct pernet_operations *ops)
  *	are called in the reverse of the order with which they were
  *	registered.
  */
+// 该函数的主要作用是将一个网络协议模块添加到每一个网络命令空间中，然后再执行其ops->init程序进行初始化，
+// 一般其ops->init会在其对应的proc目录下，生成一个网络协议模块对应的proc文件或proc目录，并执行一些协议初始化相关的函数。
 int register_pernet_subsys(struct pernet_operations *ops)
 {
 	int error;

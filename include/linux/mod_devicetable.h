@@ -16,6 +16,16 @@ typedef unsigned long kernel_ulong_t;
 
 #define PCI_ANY_ID (~0)
 
+// 天朝为了方便每个人的管理，搞了一套身份识别的玩意(档案和身份证)。kernel本省就像一个社会，每个进来的设备必须要有它独特的名字和一些档案。
+// 这个工作对PCI来说，它是由pci_device_id这个结构体来进行身份信息保存的：
+// vendor,device 分别代表设备商给的设备编号（身份证号）和该设备的名字（姓名）
+// subverdor,subdevice 分别对应的是该设备是否有别名，绝大多数设备是不需要的。class，class_mask分别对应的是该pci设备属于哪个设备：比如说，属于网络，块设备。
+// driver_data是属于该设备的私有数据，每个设备都不一样。
+// --------------------- 
+// 作者：DyLan985 
+// 来源：CSDN 
+// 原文：https://blog.csdn.net/sunstars2009918/article/details/19671613 
+版权声明：本文为博主原创文章，转载请附上博文链接！
 struct pci_device_id {
 	__u32 vendor, device;		/* Vendor and device ID or PCI_ANY_ID*/
 	__u32 subvendor, subdevice;	/* Subsystem ID's or PCI_ANY_ID */
